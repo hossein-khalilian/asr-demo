@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASR Streamer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <h1>Speech to Text Transcription</h1>
+        <button id="recordBtn">🎤 Record</button>
+        <button id="stopBtn" disabled>⏹️ Stop</button>
+        <p id="status">Idle</p>
+        <div id="loading" style="display:none;">Transcribing...</div>
+        <div class="result">
+            <h2>Transcription:</h2>
+            <p id="transcription"></p>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+
