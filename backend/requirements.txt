@@ -2,3 +2,4 @@ fastapi
 uvicorn
 nemo_toolkit[asr]
 python-multipart
+cuda-python>=12.3
