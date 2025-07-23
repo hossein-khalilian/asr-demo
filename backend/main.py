@@ -11,7 +11,8 @@ from asr_model import ASRModel
 
 MODEL_PATH = "/home/user/.cache/nemo_experiments/Speech_To_Text_Finetuning/2025-07-22_06-58-20/checkpoints/Speech_To_Text_Finetuning.nemo"
 MODEL_PATH = "/home/user/.cache/huggingface/hub/models--nvidia--stt_fa_fastconformer_hybrid_large/snapshots/249cf5bf70dda7220a60ddeeecff2f6aad8e1784/stt_fa_fastconformer_hybrid_large.nemo"
-asr_model = ASRModel(MODEL_PATH)
+MODEL_NAME = "hsekhalilian/Speech_To_Text_Finetuning_01"
+asr_model = ASRModel(MODEL_NAME)
 
 app = FastAPI()
 

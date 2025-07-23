@@ -1,3 +1,4 @@
 fastapi
 uvicorn
 nemo_toolkit[asr]
+python-multipart
