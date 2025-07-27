@@ -1,4 +1,3 @@
-import asyncio
 import os
 import shutil
 import tempfile
@@ -11,6 +10,10 @@ from asr_model import ASRModel
 
 MODEL_NAME = "hsekhalilian/Speech_To_Text_Finetuning_01"
 MODEL_NAME = "hsekhalilian/stt_fa_fastconformer_updated_tokenizer"
+# MODEL_NAME = "hsekhalilian/Speech_To_Text_Finetuning_03_no_punc_with_encoder"
+MODEL_NAME = "nvidia/stt_fa_fastconformer_hybrid_large"
+MODEL_NAME = "hsekhalilian/stt_fa_fastconformer_updated_tokenizer_01"
+
 asr_model = ASRModel(MODEL_NAME)
 
 app = FastAPI()
