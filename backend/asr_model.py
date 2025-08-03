@@ -5,7 +5,7 @@ from nemo.collections.asr.models import EncDecHybridRNNTCTCBPEModel
 
 
 class ASRModel:
-    def __init__(self, model_name_or_path):
+    def __init__(self, model_name_or_path, decoder_type="rnnt"):
         self.model_name_or_path = model_name_or_path
         self.loading = False
         print("Loading model...")
@@ -18,6 +18,9 @@ class ASRModel:
             self.model = EncDecHybridRNNTCTCBPEModel.from_pretrained(
                 model_name=self.model_name_or_path
             )
+
+        # self.model.eval()
+        # self.model.change_decoding_strategy(decoder_type=decoder_type)
 
         print("Model has been loaded.")
 
