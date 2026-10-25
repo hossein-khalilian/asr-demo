@@ -112,9 +112,9 @@ print(result.text)
 
 ### Other routes
 
-- `GET /api/v1/models`: the catalog in OpenRouter's shape (`architecture.output_modalities = ["transcription"]`, zero `pricing`), plus `languages` and `loaded`. It honours `?output_modalities=`.
+- `GET /api/v1/models`: the catalog in OpenRouter's shape (`architecture.output_modalities = ["transcription"]`, zero `pricing`), plus `languages`, `loaded`, and `available` / `unavailable_reason`. It honours `?output_modalities=`.
 - `GET /api/v1/models/{author}/{slug}`: a single model.
-- `GET /health`: no auth. Returns `default_model`, `loaded_models`, `busy` and `queue_length`.
+- `GET /health`: no auth. Returns `default_model`, `loaded_models`, `unavailable_models`, `busy` and `queue_length`.
 
 ---
 
@@ -136,6 +136,10 @@ print(result.text)
   `backend/models/`; the prod stack mounts it at `/app/models` (`"source": "models/my.nemo"`).
 - `decoder` (optional) switches hybrid RNNT/CTC checkpoints to `rnnt` or `ctc`. Leave it out
   to keep the checkpoint's saved decoder.
+- At startup the server asks the Hugging Face Hub whether it can fetch each model. A model it
+  cannot fetch (a private repo and no `HF_TOKEN`) is listed with `available: false` and a reason,
+  is greyed out in the UI, and answers 503 with that reason instead of a Hub traceback. Change
+  `backend/.env` and recreate the backend to re-check.
 - Models load on first use. At most `ASR_MAX_LOADED_MODELS` stay in memory; the least recently
   used one is unloaded to make room.
 - One request runs at a time, because NeMo models are not safe to call concurrently. Up to

@@ -13,6 +13,7 @@ def health(registry: ModelRegistry = Depends(get_registry)) -> dict:
         "status": "ok",
         "default_model": registry.default.id,
         "loaded_models": registry.loaded_ids,
+        "unavailable_models": registry.unavailable,
         "busy": registry.busy,
         "queue_length": registry.queue_length,
     }

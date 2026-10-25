@@ -102,6 +102,43 @@ class NemoEngine:
             pass
 
 
+_HF_TOKEN_HINT = "set HF_TOKEN in backend/.env to a token that can read it"
+
+
+def access_error(exc: BaseException) -> str | None:
+    """Why ``exc`` means the checkpoint cannot be fetched with the current
+    credentials, or None if it is some other failure."""
+    names = {cls.__name__ for cls in type(exc).__mro__}
+    if "GatedRepoError" in names:
+        return f"gated on Hugging Face: accept its terms, then {_HF_TOKEN_HINT}"
+    if "RepositoryNotFoundError" in names:
+        return f"private or missing on Hugging Face: {_HF_TOKEN_HINT}"
+    return None
+
+
+def check_access(source: str) -> str | None:
+    """None if ``source`` can be loaded, else why not.
+
+    Asks the Hub for the repo's metadata (a few hundred bytes) with whatever
+    token huggingface_hub finds (HF_TOKEN). Network trouble and a missing
+    huggingface_hub count as accessible: only a definite "no" marks a model
+    unavailable.
+    """
+    if os.path.exists(source):
+        return None
+    if source.endswith(".nemo"):
+        return f"local checkpoint {source} does not exist"
+    try:
+        from huggingface_hub import model_info
+    except ImportError:
+        return None
+    try:
+        model_info(source)
+    except Exception as exc:
+        return access_error(exc)
+    return None
+
+
 def _spans(items: Any, key: str) -> list[tuple[float, float, str]]:
     spans: list[tuple[float, float, str]] = []
     for item in items or []:

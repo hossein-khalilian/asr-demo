@@ -14,8 +14,8 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.asr.engine import NemoEngine, resolve_device
-from app.asr.registry import Loader, ModelRegistry, ModelSpec, load_specs
+from app.asr.engine import NemoEngine, check_access, resolve_device
+from app.asr.registry import AccessChecker, Loader, ModelRegistry, ModelSpec, load_specs
 from app.auth import require_api_key
 from app.errors import install_error_handlers
 from app.routes import health, models, transcriptions
@@ -33,7 +33,11 @@ def nemo_loader(settings: Settings) -> Loader:
     return load
 
 
-def create_app(settings: Settings | None = None, loader: Loader | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    loader: Loader | None = None,
+    access_checker: AccessChecker = check_access,
+) -> FastAPI:
     settings = settings or get_settings()
     logging.basicConfig(
         level=settings.log_level.upper(),
@@ -51,9 +55,14 @@ def create_app(settings: Settings | None = None, loader: Loader | None = None) -
     async def lifespan(app: FastAPI):
         if not settings.api_keys:
             logger.warning("API_KEYS is empty: /api/v1 is open to anyone who can reach it.")
-        # Preload in the background so /health answers while a checkpoint
-        # downloads; requests that arrive meanwhile queue behind it.
-        task = asyncio.create_task(registry.preload(registry.preload_ids(settings.asr_preload)))
+
+        # In the background so /health answers while a checkpoint downloads;
+        # requests that arrive meanwhile queue behind the preload.
+        async def startup() -> None:
+            await registry.probe(access_checker)
+            await registry.preload(registry.preload_ids(settings.asr_preload))
+
+        task = asyncio.create_task(startup())
         yield
         task.cancel()
 

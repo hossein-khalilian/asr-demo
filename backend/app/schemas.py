@@ -57,6 +57,10 @@ class Model(BaseModel):
     # Not in OpenRouter's schema; useful to clients choosing a model.
     languages: list[str] = []
     loaded: bool = False
+    #: False when this server cannot fetch the checkpoint (e.g. a private
+    #: Hugging Face repo and no HF_TOKEN); ``unavailable_reason`` says why.
+    available: bool = True
+    unavailable_reason: str | None = None
 
 
 class ListLinks(BaseModel):

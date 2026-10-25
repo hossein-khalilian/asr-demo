@@ -219,3 +219,88 @@ def test_segments_from_words():
         (18.1, 18.8, "g"),
     ]
     assert segments_from_words([]) == []
+
+
+PRIVATE = "hsekhalilian/Speech_To_Text_Finetuning_01"
+NVIDIA = "nvidia/stt-fa-fastconformer-hybrid-large"
+
+
+class RepositoryNotFoundError(Exception):
+    """Stands in for huggingface_hub's; matched by class name."""
+
+
+class GatedRepoError(RepositoryNotFoundError):
+    pass
+
+
+def _wait_for_probe(client):
+    import time
+
+    for _ in range(100):
+        if client.get("/health").json()["unavailable_models"]:
+            return
+        time.sleep(0.01)
+    raise AssertionError("startup probe never ran")
+
+
+def test_unavailable_models_are_reported(make_client, wav_bytes):
+    def checker(source):
+        return "private or missing on Hugging Face" if source == PRIVATE else None
+
+    with make_client(access_checker=checker) as client:
+        _wait_for_probe(client)
+        models = {m["id"]: m for m in client.get("/api/v1/models").json()["data"]}
+        assert models[DEFAULT]["available"] is False
+        assert "private" in models[DEFAULT]["unavailable_reason"]
+        assert models[NVIDIA]["available"] is True
+        assert models[NVIDIA]["unavailable_reason"] is None
+
+        res = client.post(
+            "/api/v1/audio/transcriptions",
+            data={"model": DEFAULT},
+            files={"file": ("a.wav", wav_bytes)},
+        )
+        assert res.status_code == 503
+        assert "unavailable on this server" in res.json()["error"]["message"]
+        assert "retry-after" not in res.headers
+
+
+def test_unavailable_model_does_not_evict_a_working_one(make_client, wav_bytes, engines):
+    def checker(source):
+        return "private" if source == PRIVATE else None
+
+    with make_client(access_checker=checker, asr_max_loaded_models=1) as client:
+        _wait_for_probe(client)
+        post = lambda model: client.post(  # noqa: E731
+            "/api/v1/audio/transcriptions",
+            data={"model": model},
+            files={"file": ("a.wav", wav_bytes)},
+        )
+        assert post(NVIDIA).status_code == 200
+        assert post(DEFAULT).status_code == 503
+        assert client.get("/health").json()["loaded_models"] == [NVIDIA]
+    assert not engines[NVIDIA].unloaded
+
+
+def test_auth_failure_on_load_marks_model_unavailable(make_client, wav_bytes):
+    error = RepositoryNotFoundError("401 Client Error ... Invalid username or password.")
+    with make_client(load_error={PRIVATE: error}) as client:
+        res = client.post(
+            "/api/v1/audio/transcriptions",
+            data={"model": DEFAULT},
+            files={"file": ("a.wav", wav_bytes)},
+        )
+        assert res.status_code == 503
+        message = res.json()["error"]["message"]
+        assert "HF_TOKEN" in message
+        assert "401 Client Error" not in message
+        model = client.get(f"/api/v1/models/{DEFAULT}").json()["data"]
+        assert model["available"] is False
+
+
+def test_access_error_classification():
+    from app.asr.engine import access_error
+
+    assert "gated" in access_error(GatedRepoError())
+    assert "private" in access_error(RepositoryNotFoundError())
+    assert access_error(RuntimeError("CUDA out of memory")) is None

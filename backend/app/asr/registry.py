@@ -18,7 +18,7 @@ from pathlib import Path
 
 from starlette.concurrency import run_in_threadpool
 
-from app.asr.engine import Engine, Transcript
+from app.asr.engine import Engine, Transcript, access_error
 from app.errors import APIError
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,8 @@ def load_specs(path: Path) -> list[ModelSpec]:
 
 
 Loader = Callable[[ModelSpec], Engine]
+#: None if a model's source can be fetched, else the reason it cannot.
+AccessChecker = Callable[[str], str | None]
 
 
 class ModelRegistry:
@@ -94,6 +96,9 @@ class ModelRegistry:
         self._lock = asyncio.Lock()
         self._waiting = 0
         self.busy = False
+        #: Models that cannot be fetched with the current credentials, and why.
+        #: Filled by :meth:`probe` at startup and by failed loads.
+        self.unavailable: dict[str, str] = {}
 
     # ── Lookup ───────────────────────────────────────────────────────────────
 
@@ -147,9 +152,23 @@ class ModelRegistry:
             self.busy = False
             self._lock.release()
 
+    async def probe(self, checker: AccessChecker) -> None:
+        """Find the models this server cannot fetch, so clients can see it in
+        /models before asking for one."""
+        for spec in self.specs.values():
+            reason = await run_in_threadpool(checker, spec.source)
+            if reason:
+                logger.warning("Model %s is unavailable: %s", spec.id, reason)
+                self.unavailable[spec.id] = reason
+            else:
+                self.unavailable.pop(spec.id, None)
+
     async def preload(self, model_ids: list[str]) -> None:
         for model_id in model_ids:
             spec = self.resolve(model_id)
+            if spec.id in self.unavailable:
+                logger.error("Not preloading %s: %s", spec.id, self.unavailable[spec.id])
+                continue
             async with self._lock:
                 try:
                     await run_in_threadpool(self._get_or_load, spec)
@@ -162,6 +181,10 @@ class ModelRegistry:
         if engine is not None:
             self._loaded.move_to_end(spec.id)
             return engine
+        # Fail before evicting anything: a model that cannot be fetched must
+        # not push out one that works.
+        if spec.id in self.unavailable:
+            raise self._unavailable_error(spec)
         while len(self._loaded) >= self._max_loaded:
             evicted_id, evicted = self._loaded.popitem(last=False)
             logger.info("Unloading %s to make room for %s", evicted_id, spec.id)
@@ -169,12 +192,25 @@ class ModelRegistry:
         try:
             engine = self._loader(spec)
         except Exception as exc:
+            reason = access_error(exc)
+            if reason:
+                logger.error("Model %s is unavailable: %s", spec.id, reason)
+                self.unavailable[spec.id] = reason
+                raise self._unavailable_error(spec) from exc
             logger.exception("Loading %s failed", spec.id)
             raise APIError(
                 503, f"Model '{spec.id}' failed to load: {exc}", headers={"Retry-After": "30"}
             ) from exc
         self._loaded[spec.id] = engine
         return engine
+
+    def _unavailable_error(self, spec: ModelSpec) -> APIError:
+        # No Retry-After: this does not fix itself; it needs a config change.
+        return APIError(
+            503,
+            f"Model '{spec.id}' is unavailable on this server: {self.unavailable[spec.id]}.",
+            metadata={"source": spec.source},
+        )
 
     def preload_ids(self, setting: str) -> list[str]:
         setting = setting.strip().lower()

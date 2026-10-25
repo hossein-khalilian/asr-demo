@@ -32,7 +32,8 @@ export function Transcriber() {
       .then(([list, health]) => {
         setModels(list);
         // Start on the server's default model (ASR_DEFAULT_MODEL), not just the first listed.
-        const preferred = list.find((m) => m.id === health?.default_model) ?? list[0];
+        const usable = list.filter((m) => m.available);
+        const preferred = usable.find((m) => m.id === health?.default_model) ?? usable[0];
         setModel((current) => current || preferred?.id || "");
       })
       .catch((err: Error) => setModelsError(err.message));
@@ -85,9 +86,10 @@ export function Transcriber() {
             >
               {models.length === 0 && <option>{modelsError ? "Unavailable" : "Loading…"}</option>}
               {models.map((m) => (
-                <option key={m.id} value={m.id}>
+                <option key={m.id} value={m.id} disabled={!m.available}>
                   {m.name}
                   {m.loaded ? "  ●" : ""}
+                  {m.available ? "" : " (unavailable)"}
                 </option>
               ))}
             </select>
@@ -115,7 +117,14 @@ export function Transcriber() {
                 {selected.hugging_face_id}
               </a>
             )}
-            {!selected.loaded && " · loads on first use, which can take a minute"}
+            {selected.available &&
+              !selected.loaded &&
+              " · loads on first use, which can take a minute"}
+          </p>
+        )}
+        {selected && !selected.available && (
+          <p className="mt-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            Unavailable on this server: {selected.unavailable_reason}.
           </p>
         )}
         {modelsError && (

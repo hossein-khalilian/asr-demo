@@ -22,6 +22,8 @@ def to_model(spec: ModelSpec, registry: ModelRegistry) -> Model:
         links=ModelLinks(details=f"/api/v1/models/{spec.id}/endpoints"),
         languages=list(spec.languages),
         loaded=registry.is_loaded(spec.id),
+        available=spec.id not in registry.unavailable,
+        unavailable_reason=registry.unavailable.get(spec.id),
     )
 
 

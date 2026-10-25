@@ -38,15 +38,18 @@ def engines() -> dict[str, FakeEngine]:
 
 @pytest.fixture
 def make_client(engines):
-    def make(**overrides) -> TestClient:
+    def make(*, access_checker=lambda source: None, load_error=None, **overrides) -> TestClient:
+        """``load_error`` maps a model's source to the exception loading it raises."""
         settings = Settings(_env_file=None, asr_preload="none", **overrides)
 
         def loader(spec):
+            if load_error and spec.source in load_error:
+                raise load_error[spec.source]
             engine = FakeEngine(spec.id)
             engines[spec.id] = engine
             return engine
 
-        return TestClient(create_app(settings, loader=loader))
+        return TestClient(create_app(settings, loader=loader, access_checker=access_checker))
 
     return make
 

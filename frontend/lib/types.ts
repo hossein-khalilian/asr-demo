@@ -6,6 +6,9 @@ export type AsrModel = {
   hugging_face_id: string | null;
   languages: string[];
   loaded: boolean;
+  /** False when the server cannot fetch the checkpoint (e.g. no HF_TOKEN for a private repo). */
+  available: boolean;
+  unavailable_reason: string | null;
 };
 
 export type Segment = { id: number; start: number; end: number; text: string };
