@@ -1,0 +1,4 @@
+# Model runtime. Install PyTorch first, from the index matching your hardware
+# (see Dockerfile's TORCH_INDEX_URL), so pip does not pick a mismatched build.
+-r requirements.txt
+nemo_toolkit[asr]>=2.2,<3

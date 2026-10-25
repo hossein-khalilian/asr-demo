@@ -1,0 +1,25 @@
+# GPU override: CUDA PyTorch + cuda-python, and the host's NVIDIA GPU passed in.
+# Needs the NVIDIA Container Toolkit on the host. Layer it on either stack:
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.gpu.yml up -d --build
+#   make prod GPU=1
+#
+# The CUDA wheels bundle their own runtime; the host only needs a driver new
+# enough for TORCH_GPU_INDEX_URL's CUDA version (cu126 → driver >= 560).
+
+services:
+  backend:
+    build:
+      args:
+        GPU: "1"
+        TORCH_INDEX_URL: ${TORCH_GPU_INDEX_URL:-https://download.pytorch.org/whl/cu126}
+    environment:
+      ASR_DEVICE: cuda
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}
+              capabilities: [gpu]

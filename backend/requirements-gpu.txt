@@ -1,0 +1,2 @@
+# CUDA Python bindings: NeMo uses them for CUDA-graph RNNT decoding on GPU.
+cuda-python>=12.3

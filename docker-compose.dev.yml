@@ -1,0 +1,92 @@
+# Development stack: source bind-mounted, hot reload on both services.
+#
+#   cp .env.example .env && cp backend/.env.example backend/.env
+#   make dev                     # or: docker compose -f docker-compose.dev.yml up -d --build
+#   make dev GPU=1               # same, with docker-compose.gpu.yml layered on
+#
+# Frontend: https://${PUBLIC_URL} through Traefik (the external `proxy` network),
+#           or http://localhost:${FRONTEND_PORT:-3000} directly
+# Backend:  http://localhost:${BACKEND_PORT:-8000}/docs
+#
+# As in prod, only the frontend joins `proxy`; the backend stays private.
+
+services:
+  backend:
+    build:
+      context: ./backend
+      target: dev
+      args:
+        REGISTRY: ${REGISTRY-docker.arvancloud.ir/}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    env_file:
+      - path: ./backend/.env
+        required: false
+    volumes:
+      - ./backend:/app
+      # Downloaded checkpoints; survives rebuilds. `make dev-down` keeps it.
+      - model_cache:/cache
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    networks:
+      app_net:
+        aliases: [asr-backend]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+      args:
+        REGISTRY: ${REGISTRY-docker.arvancloud.ir/}
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    environment:
+      API_URL: http://asr-backend:8000
+      ASR_API_KEY: ${ASR_API_KEY:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_next:/app/.next
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - backend
+    networks:
+      - app_net
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.asr-${BRANCH:-main}-frontend.rule=Host(`${PUBLIC_URL}`)"
+      - "traefik.http.routers.asr-${BRANCH:-main}-frontend.entrypoints=websecure"
+      - "traefik.http.routers.asr-${BRANCH:-main}-frontend.tls=true"
+      - "traefik.http.routers.asr-${BRANCH:-main}-frontend.tls.certresolver=le"
+      - "traefik.http.services.asr-${BRANCH:-main}-frontend.loadbalancer.server.port=3000"
+    restart: unless-stopped
+
+volumes:
+  model_cache:
+  frontend_node_modules:
+  frontend_next:
+
+networks:
+  app_net:
+    driver: bridge
+  proxy:
+    external: true

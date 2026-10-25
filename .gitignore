@@ -1,0 +1,34 @@
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Local model checkpoints (keep the directory)
+backend/models/*
+!backend/models/.gitkeep
+
+# Python
+__pycache__
+*.py[cod]
+.venv
+venv
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+frontend/next-env.d.ts
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Docker Compose local overrides
+docker-compose.override.yml

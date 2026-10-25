@@ -1,0 +1,90 @@
+# Production stack: baked images, no bind mounts, no hot reload.
+#
+# Prerequisites:
+#   - Root .env (PUBLIC_URL, BRANCH, ASR_API_KEY, …) — see .env.example
+#   - backend/.env (API_KEYS, HF_TOKEN, …) — see backend/.env.example
+#   - The external `proxy` network Traefik listens on: docker network create proxy
+#
+# Usage:
+#   make deploy                  # git pull + build + up
+#   make prod GPU=1              # with docker-compose.gpu.yml
+#
+# Only the frontend joins `proxy`. The backend stays on this stack's private
+# network and is reached publicly through the frontend's /api/v1 proxy, so its
+# service name never collides with another stack's `backend` on `proxy`.
+
+# Cap each container's json-file log at 5 x 20 MB (Docker's default has no limit).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 20m
+    max-file: "5"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      target: prod
+      args:
+        REGISTRY: ${REGISTRY-docker.arvancloud.ir/}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+    env_file:
+      - ./backend/.env
+    volumes:
+      - model_cache:/cache
+      # Local .nemo checkpoints; reference them in config/models.json as
+      # "source": "models/<file>.nemo".
+      - ./backend/models:/app/models:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    networks:
+      app_net:
+        aliases: [asr-backend]
+    restart: unless-stopped
+    logging: *logging
+
+  frontend:
+    build:
+      context: ./frontend
+      target: prod
+      args:
+        REGISTRY: ${REGISTRY-docker.arvancloud.ir/}
+    environment:
+      API_URL: http://asr-backend:8000
+      ASR_API_KEY: ${ASR_API_KEY:-}
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app_net
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.asr-${BRANCH:-main}-frontend.rule=Host(`${PUBLIC_URL}`)"
+      - "traefik.http.routers.asr-${BRANCH:-main}-frontend.entrypoints=websecure"
+      - "traefik.http.routers.asr-${BRANCH:-main}-frontend.tls=true"
+      - "traefik.http.routers.asr-${BRANCH:-main}-frontend.tls.certresolver=le"
+      - "traefik.http.services.asr-${BRANCH:-main}-frontend.loadbalancer.server.port=3000"
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  model_cache:
+
+networks:
+  app_net:
+    driver: bridge
+  proxy:
+    external: true

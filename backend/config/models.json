@@ -1,0 +1,45 @@
+{
+  "models": [
+    {
+      "id": "hsekhalilian/speech-to-text-finetuning-01",
+      "source": "hsekhalilian/Speech_To_Text_Finetuning_01",
+      "name": "Persian FastConformer (fine-tune 01)",
+      "description": "FastConformer Hybrid RNNT/CTC fine-tuned from nvidia/stt_fa_fastconformer_hybrid_large.",
+      "languages": ["fa"],
+      "created": 1735689600
+    },
+    {
+      "id": "hsekhalilian/speech-to-text-finetuning-03-no-punc",
+      "source": "hsekhalilian/Speech_To_Text_Finetuning_03_no_punc_with_encoder",
+      "name": "Persian FastConformer (fine-tune 03, no punctuation)",
+      "description": "Fine-tuned without punctuation, with the encoder trained as well.",
+      "languages": ["fa"],
+      "created": 1735689600
+    },
+    {
+      "id": "hsekhalilian/speech-to-text-rnnt-finetuned",
+      "source": "hsekhalilian/speech-to-text-rnnt-finetuned",
+      "name": "Persian FastConformer (RNNT fine-tune)",
+      "description": "RNNT-focused fine-tune.",
+      "decoder": "rnnt",
+      "languages": ["fa"],
+      "created": 1735689600
+    },
+    {
+      "id": "hsekhalilian/stt-fa-fastconformer-updated-tokenizer",
+      "source": "hsekhalilian/stt_fa_fastconformer_updated_tokenizer",
+      "name": "Persian FastConformer (updated tokenizer)",
+      "description": "Fine-tuned with an updated tokenizer.",
+      "languages": ["fa"],
+      "created": 1735689600
+    },
+    {
+      "id": "nvidia/stt-fa-fastconformer-hybrid-large",
+      "source": "nvidia/stt_fa_fastconformer_hybrid_large",
+      "name": "NVIDIA Persian FastConformer Hybrid Large",
+      "description": "NVIDIA's base Persian FastConformer Hybrid RNNT/CTC model (115M parameters).",
+      "languages": ["fa"],
+      "created": 1704067200
+    }
+  ]
+}

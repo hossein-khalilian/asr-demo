@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Bare oklch channels; tailwind.config.ts adds the alpha. */
+:root {
+  --background: 0.985 0.004 250;
+  --foreground: 0.22 0.02 260;
+  --card: 1 0 0;
+  --border: 0.91 0.01 255;
+  --muted: 0.96 0.008 255;
+  --muted-foreground: 0.52 0.02 260;
+  --primary: 0.55 0.17 255;
+  --primary-foreground: 0.99 0 0;
+  --destructive: 0.6 0.21 25;
+  --success: 0.62 0.15 155;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: 0.17 0.015 260;
+    --foreground: 0.94 0.01 255;
+    --card: 0.21 0.018 260;
+    --border: 0.3 0.02 260;
+    --muted: 0.25 0.018 260;
+    --muted-foreground: 0.68 0.02 260;
+    --primary: 0.68 0.15 255;
+    --primary-foreground: 0.17 0.015 260;
+    --destructive: 0.68 0.19 25;
+    --success: 0.72 0.15 155;
+    color-scheme: dark;
+  }
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+}

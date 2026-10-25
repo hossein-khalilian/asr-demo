@@ -1,232 +1,233 @@
-# ASR Demo — Persian Speech-to-Text
+# ASR Demo: Persian Speech-to-Text
 
-A small web demo for **Automatic Speech Recognition (ASR)**. You record audio in the browser, the audio goes to a Python backend, and the backend transcribes it with an [NVIDIA NeMo](https://github.com/NVIDIA/NeMo) **FastConformer Hybrid RNNT/CTC** model. The default models are Persian (Farsi) checkpoints fine-tuned from `nvidia/stt_fa_fastconformer_hybrid_large` and hosted on the Hugging Face Hub.
+Self-hosted Persian speech recognition with [NVIDIA NeMo](https://github.com/NVIDIA/NeMo)
+FastConformer models, served through **OpenRouter's speech-to-text API**. Any OpenRouter or
+OpenAI client can use it by changing the base URL. A Next.js app records or uploads audio and
+shows the transcript with timestamps.
 
 ```
-┌──────────────────────────┐   POST /transcribe (multipart, .webm)   ┌──────────────────────────────┐
-│  Frontend (static HTML)  │ ──────────────────────────────────────▶ │  Backend (FastAPI + Uvicorn) │
-│  MediaRecorder API       │                                         │  NeMo Hybrid RNNT/CTC model  │
-│  http://localhost:8080   │ ◀────────────────────────────────────── │  http://localhost:8000       │
-└──────────────────────────┘            { "text": "..." }            └──────────────────────────────┘
+ Browser ──▶ Next.js (:3000) ──/api/v1/*──▶ FastAPI + NeMo (:8000)
+             record / upload    same-origin   GET  /api/v1/models
+             server-side key    proxy         POST /api/v1/audio/transcriptions
 ```
+
+The API matches OpenRouter's, so abrisham-stt can add this server as a transcription provider
+later. See [docs/abrisham-stt-integration.md](docs/abrisham-stt-integration.md).
 
 ---
 
-## Features
+## Quick start (Docker)
 
-- One-click recording in the browser (🎤 Record / ⏹️ Stop) using the MediaRecorder API
-- Transcription on the server with a NeMo `EncDecHybridRNNTCTCBPEModel`
-- Loads a model from a **local `.nemo` file** or from a **Hugging Face / NGC model name**
-- Inference runs in a thread-pool executor, so the async FastAPI event loop is not blocked
-- A `/status` endpoint that reports whether a transcription is running
-- No build step: plain HTML, CSS and JavaScript on the frontend
-
----
-
-## Tech Stack
-
-| Layer | Technology | Purpose |
-|-------|------------|---------|
-| ASR model | [NVIDIA NeMo](https://github.com/NVIDIA/NeMo) (`nemo_toolkit[asr]`) | FastConformer Hybrid RNNT/CTC BPE model |
-| Model hosting | [Hugging Face Hub](https://huggingface.co/) | Pretrained and fine-tuned checkpoints |
-| Backend framework | [FastAPI](https://fastapi.tiangolo.com/) | REST API |
-| ASGI server | [Uvicorn](https://www.uvicorn.org/) | Serves the FastAPI app |
-| File uploads | `python-multipart` | Parses `multipart/form-data` uploads |
-| GPU | `cuda-python>=12.3` | CUDA bindings used by NeMo for GPU inference |
-| Frontend | Vanilla HTML / CSS / JavaScript | Recording UI (`MediaRecorder`, `fetch`, `FormData`) |
-| Static server | Python `http.server` | Serves the frontend during development |
-
----
-
-## Project Structure
-
-```
-asr-demo/
-├── backend/
-│   ├── main.py            # FastAPI app: model selection, CORS, /transcribe and /status endpoints
-│   ├── asr_model.py       # ASRModel wrapper: loads the NeMo model and runs async transcription
-│   ├── requirements.txt   # Python dependencies
-│   ├── run.sh             # Starts the API: uvicorn main:app --reload (port 8000)
-│   └── .gitignore
-└── frontend/
-    ├── index.html         # UI: record/stop buttons, status line, transcription area
-    ├── app.js             # Captures microphone audio and POSTs it to the backend
-    ├── style.css          # Styling
-    └── run.sh             # Serves the frontend: python -m http.server 8080
+```bash
+make dev        # copies .env.example → .env and backend/.env on first run
 ```
 
+Open **http://localhost:3000**. The backend's Swagger UI is at http://localhost:8000/docs.
+
+The first start downloads the default checkpoint (~450 MB) into the `model_cache` volume. `/health`
+answers right away, and transcriptions wait in the queue until the model has loaded. Follow the
+progress with `make dev-logs SERVICE=backend`.
+
+> **Private checkpoints:** the `hsekhalilian/*` models are private on Hugging Face. Set
+> `HF_TOKEN` in `backend/.env`, or set `ASR_DEFAULT_MODEL=nvidia/stt-fa-fastconformer-hybrid-large`
+> to use NVIDIA's public model.
+
+| Command | What it does |
+|---|---|
+| `make dev` / `make dev-down` | Dev stack with hot reload on both services |
+| `make dev-logs SERVICE=backend` | Tail the logs of one service |
+| `make prod` | Prod stack: baked images, served behind Traefik on `PUBLIC_URL` |
+| `make deploy` | `git pull` + rebuild + restart the prod stack |
+| `make … GPU=1` | Add `docker-compose.gpu.yml`: CUDA PyTorch and the host GPU (needs the NVIDIA Container Toolkit) |
+| `make test` | Backend ruff + pytest and frontend lint + typecheck, without Docker or NeMo |
+
 ---
 
-## How It Works
+## API
 
-1. **Record.** When you click **Record**, `app.js` asks for microphone access with `navigator.mediaDevices.getUserMedia` and starts a `MediaRecorder`.
-2. **Upload.** When you click **Stop**, the recorded chunks are combined into an `audio/webm` blob and sent as `file` (`recording.webm`) in a `multipart/form-data` POST to `http://localhost:8000/transcribe`.
-3. **Save to a temporary file.** `main.py` writes the upload to a temporary file that keeps the original extension.
-4. **Transcribe.** `ASRModel.transcribe()` calls `model.transcribe(path)` through `loop.run_in_executor`, so the blocking inference does not stall the server. It sets a `loading` flag while it runs.
-5. **Respond.** The backend returns `{"text": "<transcription>"}` and deletes the temporary file. The frontend shows the text.
+The routes follow OpenRouter's API reference for [models](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties)
+and [speech-to-text](https://openrouter.ai/docs/api/api-reference/stt/create-transcription).
+When `API_KEYS` is set, every `/api/v1/*` call needs `Authorization: Bearer <key>`.
 
-### Model loading (`asr_model.py`)
+### `POST /api/v1/audio/transcriptions`
+
+Multipart form (OpenAI-style, which is what the OpenAI SDK sends):
+
+```bash
+curl http://localhost:8000/api/v1/audio/transcriptions \
+  -H "Authorization: Bearer $KEY" \
+  -F file=@sample.mp3 \
+  -F model=hsekhalilian/speech-to-text-finetuning-01
+```
+
+Or JSON with base64 audio:
+
+```json
+{
+  "model": "hsekhalilian/speech-to-text-finetuning-01",
+  "input_audio": { "data": "<base64>", "format": "mp3" },
+  "response_format": "verbose_json",
+  "timestamp_granularities": ["segment", "word"]
+}
+```
+
+Response:
+
+```json
+{ "text": "…", "usage": { "seconds": 19.27, "cost": 0.0 } }
+```
+
+`verbose_json` adds `language`, `duration`, `segments`, and `words` when you request
+`timestamp_granularities: ["word"]`. The response headers carry `X-Generation-Id`, `X-Model`
+and `X-Processing-Ms`.
+
+| Field | Notes |
+|---|---|
+| `model` | A model id from `/api/v1/models`, or its Hugging Face name. If omitted, the server default is used. |
+| `file` / `input_audio` | Any format ffmpeg reads (wav, mp3, flac, m4a, ogg, webm, aac); `pcm` = raw s16le 16 kHz mono. 25 MB maximum. |
+| `language` | Optional hint. A model accepts only the languages it lists (`fa`, `fa-IR`); anything else is a 400. |
+| `response_format` | `json` (default) or `verbose_json`. `text`, `srt` and `vtt` return a 400, as on OpenRouter. |
+| `prompt`, `temperature`, `provider`, `trace`, `session_id`, `user` | Accepted and ignored |
+| `diarize`, `keyterms`, `input_audio.url`, `source_url` | Not supported: 400 |
+
+Errors use OpenRouter's envelope, and the HTTP status equals `code`:
+
+```json
+{ "error": { "code": 400, "message": "'openai/whisper-1' is not a valid model ID.", "metadata": { "available": ["…"] } } }
+```
+
+### With the OpenAI SDK
 
 ```python
-if os.path.exists(model_name_or_path):
-    model = EncDecHybridRNNTCTCBPEModel.restore_from(restore_path=model_name_or_path)   # local .nemo file
-else:
-    model = EncDecHybridRNNTCTCBPEModel.from_pretrained(model_name=model_name_or_path)  # HF Hub / NGC
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/api/v1", api_key="sk-asr-…")
+result = client.audio.transcriptions.create(
+    model="hsekhalilian/speech-to-text-finetuning-01",
+    file=open("sample.mp3", "rb"),
+    language="fa",
+)
+print(result.text)
 ```
 
-The model loads **once, when the module is imported**, so the first startup can take a while (the checkpoint download is cached after that).
+### Other routes
+
+- `GET /api/v1/models`: the catalog in OpenRouter's shape (`architecture.output_modalities = ["transcription"]`, zero `pricing`), plus `languages` and `loaded`. It honours `?output_modalities=`.
+- `GET /api/v1/models/{author}/{slug}`: a single model.
+- `GET /health`: no auth. Returns `default_model`, `loaded_models`, `busy` and `queue_length`.
 
 ---
 
-## Prerequisites
+## Models
 
-- **Python 3.10+** (check the NeMo release you install for its supported versions)
-- **An NVIDIA GPU with CUDA 12.3+** is recommended. CPU inference may work but is much slower.
-- **FFmpeg** is most likely needed. The browser sends WebM/Opus audio, and decoding it on the backend usually relies on `ffmpeg` being on your `PATH`.
-- **A modern browser** that supports `MediaRecorder` (Chrome, Firefox, Edge).
-- Build tools that NeMo may need (for example `build-essential`, `libsndfile1`, `Cython`), depending on your platform.
-
----
-
-## Installation
-
-```bash
-git clone <repo-url> asr-demo
-cd asr-demo/backend
-
-python -m venv .venv
-source .venv/bin/activate
-
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-> Tip: install a PyTorch build that matches your CUDA version **before** `nemo_toolkit` (see [pytorch.org](https://pytorch.org/get-started/locally/)). Otherwise pip may install a mismatched CPU or CUDA build.
-
----
-
-## Running
-
-Open two terminals.
-
-**1. Backend (port 8000)**
-
-```bash
-cd backend
-./run.sh
-```
-
-This is the same as `uvicorn main:app --reload`. Wait until the log shows `Model has been loaded.`
-
-**2. Frontend (port 8080)**
-
-```bash
-cd frontend
-./run.sh
-```
-
-Then open **http://localhost:8080** in your browser, allow microphone access, click **Record**, speak, and click **Stop**.
-
-> Browsers only allow microphone access in a secure context, meaning `https://` or `localhost`. If you open the frontend from another machine through a plain-HTTP IP address, recording will fail with `getUserMedia not supported`.
-
----
-
-## API Reference
-
-### `POST /transcribe`
-
-Transcribes one uploaded audio file.
-
-- **Content-Type:** `multipart/form-data`
-- **Field:** `file`: the audio file (`.wav`, `.webm`, `.flac`, …)
-
-```bash
-curl -X POST -F "file=@sample.wav" http://localhost:8000/transcribe
-```
-
-**Response**
+[`backend/config/models.json`](backend/config/models.json) lists the models:
 
 ```json
-{ "text": "transcribed text" }
+{
+  "id": "hsekhalilian/speech-to-text-finetuning-01",
+  "source": "hsekhalilian/Speech_To_Text_Finetuning_01",
+  "name": "Persian FastConformer (fine-tune 01)",
+  "decoder": "rnnt",
+  "languages": ["fa"]
+}
 ```
 
-### `GET /status`
-
-Reports whether a transcription is running.
-
-```bash
-curl http://localhost:8000/status
-```
-
-```json
-{ "loading": false }
-```
-
-FastAPI also generates interactive docs at **http://localhost:8000/docs** (Swagger UI) and **http://localhost:8000/redoc**.
+- `source` is a Hugging Face / NGC name, or a path to a local `.nemo` file. Put local files in
+  `backend/models/`; the prod stack mounts it at `/app/models` (`"source": "models/my.nemo"`).
+- `decoder` (optional) switches hybrid RNNT/CTC checkpoints to `rnnt` or `ctc`. Leave it out
+  to keep the checkpoint's saved decoder.
+- Models load on first use. At most `ASR_MAX_LOADED_MODELS` stay in memory; the least recently
+  used one is unloaded to make room.
+- One request runs at a time, because NeMo models are not safe to call concurrently. Up to
+  `MAX_QUEUE` requests wait, and past that the server answers 503 with `Retry-After`.
+- Models that emit no punctuation return the whole clip as one NeMo segment. `verbose_json` then
+  builds segments from word timings, cutting at pauses.
 
 ---
 
 ## Configuration
 
-Everything is set in `backend/main.py`.
+**`backend/.env`** ([example](backend/.env.example)):
 
-### Choosing a model
+| Variable | Default | |
+|---|---|---|
+| `ASR_DEFAULT_MODEL` | first in models.json | Used when a request names no model |
+| `ASR_PRELOAD` | `default` | `default`, `all`, `none`, or a comma list of ids |
+| `ASR_MAX_LOADED_MODELS` | `2` | Models kept in memory |
+| `ASR_DEVICE` | `auto` | `auto`, `cuda` or `cpu` |
+| `API_KEYS` | empty | Comma-separated bearer keys. **Empty = open API**, for local use only |
+| `MAX_UPLOAD_MB` / `MAX_AUDIO_SECONDS` / `MAX_QUEUE` | `25` / `600` / `16` | Request limits |
+| `HF_TOKEN` | empty | Needed for the private `hsekhalilian/*` checkpoints |
 
-`MODEL_NAME` is assigned several times, and **the last assignment wins**. Right now that is:
+**`.env`** at the repo root ([example](.env.example)) holds compose settings: ports, `PUBLIC_URL`/`BRANCH` for
+Traefik, `ASR_API_KEY` (the key the frontend proxy sends; it must be one of `API_KEYS`), and the
+base image registry and pip/PyTorch indexes.
 
-```python
-MODEL_NAME = "hsekhalilian/Speech_To_Text_Finetuning_01"
-```
-
-Other options in the file:
-
-| Model | Notes |
-|-------|-------|
-| `nvidia/stt_fa_fastconformer_hybrid_large` | Base NVIDIA Persian FastConformer hybrid model |
-| `hsekhalilian/stt_fa_fastconformer_updated_tokenizer` | Fine-tuned with an updated tokenizer |
-| `hsekhalilian/stt_fa_fastconformer_updated_tokenizer_01` | Updated-tokenizer variant |
-| `hsekhalilian/Speech_To_Text_Finetuning_01` | Fine-tuned checkpoint (**current default**) |
-| `hsekhalilian/Speech_To_Text_Finetuning_03_no_punc_with_encoder` | Fine-tuned without punctuation, encoder also trained |
-| `hsekhalilian/speech-to-text-rnnt-finetuned` | RNNT-focused fine-tune |
-
-You can also set `MODEL_NAME` to the path of a local `.nemo` file.
-
-### Decoder type
-
-```python
-decoder_type = "rnnt"  # or "ctc"
-```
-
-Hybrid models have both an RNNT decoder and a CTC decoder. **Right now this setting has no effect**: the `change_decoding_strategy(decoder_type=...)` call in `asr_model.py` is commented out, so the model uses the decoder saved in its config (usually RNNT). To switch decoders, uncomment these lines in `ASRModel.__init__`:
-
-```python
-self.model.eval()
-self.model.change_decoding_strategy(decoder_type=decoder_type)
-```
-
-### Backend URL and CORS
-
-- The frontend's backend URL is hard-coded in `frontend/app.js` as `http://localhost:8000/transcribe`. Change it if the backend runs on a different host or port.
-- CORS is fully open (`allow_origins=["*"]`). That is fine for a local demo; restrict it before any public deployment.
+**Frontend** (server-side only, never sent to the browser): `API_URL` and `ASR_API_KEY`.
 
 ---
 
-## Known Limitations and Notes
+## Development without Docker
 
-- **Development setup only.** `uvicorn --reload` and `python -m http.server` are not meant for production.
-- **Single global model, one shared `loading` flag.** Concurrent requests share the model, and `/status` does not track overlapping requests correctly.
-- **No streaming.** Audio is transcribed after recording stops, not in real time. The page title "ASR Streamer" does not mean it streams.
-- **Unused UI hooks.** `index.html` includes a `#loading` indicator and `app.js` declares `statusInterval`, but neither is wired up. The frontend does not poll `/status` yet.
-- **The microphone stays open.** The `MediaStream` tracks are not stopped after recording, so the browser's mic indicator may stay on until you close the tab.
-- **Startup time.** The model loads when the module is imported. The first run downloads the checkpoint (hundreds of MB), and `--reload` reloads the model after every code change.
+```bash
+# Backend (needs ffmpeg)
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install torch --index-url https://download.pytorch.org/whl/cpu   # or a CUDA index
+pip install -r requirements-asr.txt -r requirements-dev.txt
+uvicorn app.main:app --reload
+
+# Frontend
+cd frontend
+pnpm install
+API_URL=http://localhost:8000 pnpm dev
+```
+
+The tests replace NeMo with a fake engine, so `pip install -r requirements-dev.txt` is enough to
+run `pytest`. One test drives the real OpenAI SDK against the API.
 
 ---
 
-## Possible Improvements
+## Project structure
 
-- Read `MODEL_NAME`, `decoder_type` and the backend URL from environment variables or a config file
-- Real-time streaming transcription over WebSockets with NeMo's cache-aware streaming
-- A file-upload option alongside microphone recording
-- Show the `#loading` indicator and poll `/status` from the frontend
-- Package with Docker (a CUDA base image and FFmpeg) for reproducible deployment
-- Stop the `MediaStream` tracks after each recording
+```
+asr-demo/
+├── backend/
+│   ├── app/
+│   │   ├── main.py              # app factory: registry, CORS, auth, routers, background preload
+│   │   ├── settings.py          # environment configuration
+│   │   ├── schemas.py           # OpenRouter-shaped request/response models
+│   │   ├── errors.py            # {"error": {code, message}} envelope
+│   │   ├── auth.py              # bearer API keys
+│   │   ├── audio.py             # ffmpeg → 16 kHz mono WAV
+│   │   ├── asr/engine.py        # NeMo wrapper (lazy import), timestamps
+│   │   ├── asr/registry.py      # model catalog, LRU loading, single-flight queue
+│   │   └── routes/              # models, audio/transcriptions, health
+│   ├── config/models.json
+│   ├── tests/
+│   ├── Dockerfile               # base → deps → dev | prod
+│   └── requirements*.txt        # API / +NeMo / +GPU / +dev
+├── frontend/                    # Next.js 16, React 19, Tailwind
+│   ├── app/api/v1/[...path]/    # same-origin proxy to the backend (adds the API key)
+│   ├── app/api/health/
+│   ├── components/              # transcriber, record/upload panels, result card
+│   ├── hooks/use-recorder.ts    # MediaRecorder + level meter, releases the mic on stop
+│   └── Dockerfile               # dev | standalone prod
+├── docker-compose.dev.yml       # hot reload, published ports
+├── docker-compose.prod.yml      # baked images, Traefik on PUBLIC_URL
+├── docker-compose.gpu.yml       # CUDA override for either stack
+├── docs/abrisham-stt-integration.md
+└── Makefile
+```
+
+## Notes
+
+- **Microphone access** needs a secure context: `https://` or `localhost`.
+- **The public page makes the API public.** The frontend proxy adds `ASR_API_KEY` to browser
+  requests, so anyone who can open the page can transcribe. Callers that send their own
+  `Authorization` header keep it.
+- **Run one backend worker per process.** Each process holds its own model copy and queue. Scale
+  out with more containers.
+- **Long audio.** NeMo decodes a clip in one pass, so very long audio can exhaust GPU memory.
+  `MAX_AUDIO_SECONDS` rejects anything over the limit; split long recordings into chunks, as
+  abrisham-stt does (≤ 60 s).

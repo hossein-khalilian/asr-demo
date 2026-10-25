@@ -1,5 +1,6 @@
-fastapi
-uvicorn
-nemo_toolkit[asr]
-python-multipart
-cuda-python>=12.3
+# API server. Enough to run the tests; the model runtime is in requirements-asr.txt.
+fastapi>=0.115,<1
+uvicorn[standard]>=0.32
+python-multipart>=0.0.18
+pydantic>=2.9,<3
+pydantic-settings>=2.7,<3
