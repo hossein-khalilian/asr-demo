@@ -104,7 +104,7 @@ async def create_transcription(
                 f"Audio is {decoded.seconds:.0f}s; the limit is {settings.max_audio_seconds:.0f}s. "
                 "Split it into shorter chunks.",
             )
-        transcript = await registry.transcribe(spec, str(decoded.path), timestamps=verbose)
+        transcript, timings = await registry.transcribe(spec, str(decoded.path), timestamps=verbose)
 
     body = STTResponse(text=transcript.text, usage=Usage(seconds=decoded.seconds))
     if verbose:
@@ -125,13 +125,28 @@ async def create_transcription(
             body.words = [Word(word=w, start=s, end=e) for s, e, w in transcript.words]
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
-    logger.info("Transcribed %.1fs of audio with %s in %dms", decoded.seconds, spec.id, elapsed_ms)
+    # Total time includes waiting behind other requests; inference alone is
+    # what says how fast the model is (RTF < 1 is faster than real time).
+    logger.info(
+        "Transcribed %.1fs of audio with %s: inference %dms (RTF %.2f), "
+        "queued %dms, model load %dms, total %dms",
+        decoded.seconds,
+        spec.id,
+        timings.inference_ms,
+        timings.inference_ms / 1000 / decoded.seconds,
+        timings.queued_ms,
+        timings.load_ms,
+        elapsed_ms,
+    )
     return JSONResponse(
         body.model_dump(exclude_none=True),
         headers={
             "X-Generation-Id": f"gen-{uuid.uuid4().hex}",
             "X-Model": spec.id,
             "X-Processing-Ms": str(elapsed_ms),
+            "X-Queue-Ms": str(timings.queued_ms),
+            "X-Load-Ms": str(timings.load_ms),
+            "X-Inference-Ms": str(timings.inference_ms),
         },
     )
 

@@ -17,7 +17,9 @@ export function ResultCard({
   const audioRef = useRef<HTMLAudioElement>(null);
   const [copied, setCopied] = useState(false);
   const seconds = result.usage.seconds;
-  const rtf = result.processingMs ? result.processingMs / 1000 / seconds : null;
+  const timings = result.timings;
+  // Waiting for the model and loading it say nothing about its speed.
+  const waitedMs = timings ? timings.queueMs + timings.loadMs : 0;
 
   const copy = async () => {
     await navigator.clipboard.writeText(result.text);
@@ -40,11 +42,19 @@ export function ResultCard({
         <span>{result.source}</span>
         <span>·</span>
         <span>{formatDuration(seconds)} audio</span>
-        {result.processingMs !== null && (
+        {timings && (
           <>
             <span>·</span>
-            <span title={rtf ? `Real-time factor ${rtf.toFixed(2)}` : undefined}>
-              {formatDuration(result.processingMs / 1000)} to transcribe
+            <span
+              title={[
+                `Real-time factor ${(timings.inferenceMs / 1000 / seconds).toFixed(2)}`,
+                `Queued ${formatDuration(timings.queueMs / 1000)}`,
+                `Model load ${formatDuration(timings.loadMs / 1000)}`,
+                `Total ${formatDuration(timings.totalMs / 1000)}`,
+              ].join(" · ")}
+            >
+              {formatDuration(timings.inferenceMs / 1000)} to transcribe
+              {waitedMs >= 1000 && ` (+${formatDuration(waitedMs / 1000)} waiting)`}
             </span>
           </>
         )}

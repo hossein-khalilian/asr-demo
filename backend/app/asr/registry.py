@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -64,6 +65,16 @@ def load_specs(path: Path) -> list[ModelSpec]:
     if not specs:
         raise ValueError(f"{path} lists no models")
     return specs
+
+
+@dataclass
+class Timings:
+    """Where one request's time went, in milliseconds."""
+
+    queued_ms: int = 0
+    #: Loading the checkpoint; 0 when it was already in memory.
+    load_ms: int = 0
+    inference_ms: int = 0
 
 
 Loader = Callable[[ModelSpec], Engine]
@@ -127,7 +138,11 @@ class ModelRegistry:
 
     # ── Inference ────────────────────────────────────────────────────────────
 
-    async def transcribe(self, spec: ModelSpec, wav_path: str, *, timestamps: bool) -> Transcript:
+    async def transcribe(
+        self, spec: ModelSpec, wav_path: str, *, timestamps: bool
+    ) -> tuple[Transcript, Timings]:
+        timings = Timings()
+        started = time.perf_counter()
         if self._lock.locked() and self._waiting >= self._max_queue:
             raise APIError(
                 503,
@@ -142,12 +157,20 @@ class ModelRegistry:
             self._waiting -= 1
         self.busy = True
         try:
+            timings.queued_ms = _ms_since(started)
+            mark = time.perf_counter()
             engine = await run_in_threadpool(self._get_or_load, spec)
+            timings.load_ms = _ms_since(mark)
+            mark = time.perf_counter()
             try:
-                return await run_in_threadpool(engine.transcribe, wav_path, timestamps=timestamps)
+                transcript = await run_in_threadpool(
+                    engine.transcribe, wav_path, timestamps=timestamps
+                )
             except Exception as exc:
                 logger.exception("Transcription failed on %s", spec.id)
                 raise APIError(500, f"Transcription failed: {exc}") from exc
+            timings.inference_ms = _ms_since(mark)
+            return transcript, timings
         finally:
             self.busy = False
             self._lock.release()
@@ -221,3 +244,7 @@ class ModelRegistry:
         if setting == "all":
             return list(self.specs)[: self._max_loaded]
         return [self.resolve(name).id for name in setting.split(",") if name.strip()]
+
+
+def _ms_since(start: float) -> int:
+    return int((time.perf_counter() - start) * 1000)

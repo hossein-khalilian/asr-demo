@@ -304,3 +304,51 @@ def test_access_error_classification():
     assert "gated" in access_error(GatedRepoError())
     assert "private" in access_error(RepositoryNotFoundError())
     assert access_error(RuntimeError("CUDA out of memory")) is None
+
+
+def test_timing_headers(client, wav_bytes):
+    res = client.post("/api/v1/audio/transcriptions", files={"file": ("a.wav", wav_bytes)})
+    assert res.status_code == 200
+    timings = {name: int(res.headers[f"x-{name}-ms"]) for name in ("queue", "load", "inference")}
+    assert all(value >= 0 for value in timings.values())
+    assert int(res.headers["x-processing-ms"]) >= timings["inference"]
+
+
+def test_error_responses_are_logged_with_reason(client, caplog):
+    caplog.set_level("INFO", logger="app.errors")
+    client.post("/api/v1/audio/transcriptions", files={"file": ("a.mp3", b"not audio")})
+    client.get("/api/v1/models/nope/missing")
+    lines = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "app.errors"]
+    assert lines[0][0] == "WARNING"
+    assert lines[0][1].startswith("400 POST /api/v1/audio/transcriptions: Could not decode")
+    # A client probing for a model id is routine, not a warning.
+    assert lines[1] == (
+        "INFO",
+        "404 GET /api/v1/models/nope/missing: Model 'nope/missing' not found.",
+    )
+
+
+def test_unknown_nemo_log_level_is_ignored(caplog):
+    from app.asr.engine import quiet_nemo
+
+    quiet_nemo("chatty")  # returns before importing NeMo, which tests do not install
+    assert "Unknown ASR_NEMO_LOG_LEVEL" in caplog.text
+
+
+def test_nemo_log_filter():
+    import logging
+
+    from app.asr.engine import _NemoLevelFilter
+
+    def record(level, path):
+        return logging.LogRecord("x", level, path, 1, "msg", None, None)
+
+    nemo_file = (
+        "/opt/venv/lib/python3.12/site-packages/nemo/collections/common/data/lhotse/cutset.py"
+    )
+    keep = _NemoLevelFilter(logging.ERROR)
+    assert not keep.filter(record(logging.WARNING, nemo_file))
+    assert not keep.filter(record(logging.INFO, nemo_file))
+    assert keep.filter(record(logging.ERROR, nemo_file))
+    # Our own logs and other libraries are untouched.
+    assert keep.filter(record(logging.INFO, "/app/app/routes/transcriptions.py"))

@@ -49,13 +49,19 @@ export async function transcribe(
   }
   const res = await fetch("/api/v1/audio/transcriptions", { method: "POST", body: form, signal });
   const body = await parse<TranscriptionResponse>(res);
-  const processing = Number(res.headers.get("x-processing-ms"));
+  const ms = (name: string) => Number(res.headers.get(`x-${name}-ms`) ?? NaN);
+  const timings = {
+    totalMs: ms("processing"),
+    queueMs: ms("queue"),
+    loadMs: ms("load"),
+    inferenceMs: ms("inference"),
+  };
   return {
     ...body,
     id: res.headers.get("x-generation-id") ?? crypto.randomUUID(),
     model: res.headers.get("x-model") ?? model,
     source: filename,
-    processingMs: Number.isFinite(processing) && processing > 0 ? processing : null,
+    timings: Object.values(timings).every(Number.isFinite) ? timings : null,
     createdAt: Date.now(),
   };
 }

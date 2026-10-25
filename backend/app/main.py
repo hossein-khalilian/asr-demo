@@ -28,7 +28,12 @@ def nemo_loader(settings: Settings) -> Loader:
     device = resolve_device(settings.asr_device)
 
     def load(spec: ModelSpec) -> NemoEngine:
-        return NemoEngine(spec.source, decoder=spec.decoder, device=device)
+        return NemoEngine(
+            spec.source,
+            decoder=spec.decoder,
+            device=device,
+            log_level=settings.asr_nemo_log_level,
+        )
 
     return load
 
@@ -80,7 +85,14 @@ def create_app(
         allow_credentials="*" not in settings.cors_origins,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
-        expose_headers=["X-Generation-Id", "X-Model", "X-Processing-Ms"],
+        expose_headers=[
+            "X-Generation-Id",
+            "X-Model",
+            "X-Processing-Ms",
+            "X-Queue-Ms",
+            "X-Load-Ms",
+            "X-Inference-Ms",
+        ],
     )
     install_error_handlers(app)
 

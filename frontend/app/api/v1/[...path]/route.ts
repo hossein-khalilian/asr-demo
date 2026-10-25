@@ -14,6 +14,9 @@ const RESPONSE_HEADERS = [
   "x-generation-id",
   "x-model",
   "x-processing-ms",
+  "x-queue-ms",
+  "x-load-ms",
+  "x-inference-ms",
 ];
 
 type Context = { params: Promise<{ path: string[] }> };

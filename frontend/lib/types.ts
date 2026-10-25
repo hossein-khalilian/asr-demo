@@ -36,6 +36,7 @@ export type TranscriptionResult = TranscriptionResponse & {
   id: string;
   model: string;
   source: string;
-  processingMs: number | null;
+  /** Timings from the X-*-Ms headers; null when the backend sent none. */
+  timings: { totalMs: number; queueMs: number; loadMs: number; inferenceMs: number } | null;
   createdAt: number;
 };

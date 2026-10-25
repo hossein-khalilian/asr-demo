@@ -27,6 +27,44 @@ class Engine(Protocol):
     def unload(self) -> None: ...
 
 
+class _NemoLevelFilter(logging.Filter):
+    """Drops records from NeMo's own code below ``level``.
+
+    A filter rather than a level because NeMo's ``transcribe()`` forces its
+    logger to WARNING for every call, which a plain level would not survive.
+    Matching on the source path also catches NeMo modules that log through
+    the root logger (Lhotse's "Initializing Lhotse CutSet" on every request).
+    """
+
+    def __init__(self, level: int) -> None:
+        super().__init__()
+        self.level = level
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= self.level:
+            return True
+        return "/nemo/" not in record.pathname.replace("\\", "/")
+
+
+_nemo_filter: _NemoLevelFilter | None = None
+
+
+def quiet_nemo(level: str) -> None:
+    """Hide NeMo's (and NVIDIA OneLogger's) records below ``level``."""
+    global _nemo_filter
+    numeric = logging.getLevelName(level.upper())
+    if not isinstance(numeric, int):
+        logger.warning("Unknown ASR_NEMO_LOG_LEVEL %r; leaving NeMo's logging as is", level)
+        return
+    logging.getLogger("nv_one_logger").setLevel(numeric)
+    if _nemo_filter is None:
+        _nemo_filter = _NemoLevelFilter(numeric)
+        # NeMo's logger does not propagate, so it needs the filter itself.
+        logging.getLogger("nemo_logger").addFilter(_nemo_filter)
+        logging.getLogger().addFilter(_nemo_filter)
+    _nemo_filter.level = numeric
+
+
 def resolve_device(requested: str) -> str:
     if requested != "auto":
         return requested
@@ -41,7 +79,11 @@ def resolve_device(requested: str) -> str:
 class NemoEngine:
     """One loaded NeMo ASR checkpoint (CTC, RNNT or hybrid RNNT/CTC)."""
 
-    def __init__(self, source: str, *, decoder: str | None, device: str) -> None:
+    def __init__(
+        self, source: str, *, decoder: str | None, device: str, log_level: str = "error"
+    ) -> None:
+        # Before importing the ASR collection, which logs warnings on import.
+        quiet_nemo(log_level)
         import torch
         from nemo.collections.asr.models import ASRModel
 

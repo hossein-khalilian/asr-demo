@@ -78,8 +78,10 @@ Response:
 ```
 
 `verbose_json` adds `language`, `duration`, `segments`, and `words` when you request
-`timestamp_granularities: ["word"]`. The response headers carry `X-Generation-Id`, `X-Model`
-and `X-Processing-Ms`.
+`timestamp_granularities: ["word"]`. The response headers carry `X-Generation-Id` and `X-Model`,
+plus timings in milliseconds: `X-Inference-Ms` (the model itself), `X-Queue-Ms` (waiting behind
+other requests), `X-Load-Ms` (loading the checkpoint, 0 when it was already in memory) and
+`X-Processing-Ms` (the whole request).
 
 | Field | Notes |
 |---|---|
@@ -159,6 +161,7 @@ print(result.text)
 | `ASR_PRELOAD` | `default` | `default`, `all`, `none`, or a comma list of ids |
 | `ASR_MAX_LOADED_MODELS` | `2` | Models kept in memory |
 | `ASR_DEVICE` | `auto` | `auto`, `cuda` or `cpu` |
+| `ASR_NEMO_LOG_LEVEL` | `error` | NeMo's own logging. It warns on every request otherwise; use `warning` or `info` to debug a model |
 | `API_KEYS` | empty | Comma-separated bearer keys. **Empty = open API**, for local use only |
 | `MAX_UPLOAD_MB` / `MAX_AUDIO_SECONDS` / `MAX_QUEUE` | `25` / `600` / `16` | Request limits |
 | `HF_TOKEN` | empty | Needed for the private `hsekhalilian/*` checkpoints |
@@ -223,6 +226,18 @@ asr-demo/
 ├── docs/abrisham-stt-integration.md
 └── Makefile
 ```
+
+## Logs
+
+The backend writes one line per transcription and one per rejected request:
+
+```
+INFO app.routes.transcriptions: Transcribed 113.4s of audio with hsekhalilian/speech-to-text-finetuning-01: inference 26159ms (RTF 0.23), queued 0ms, model load 0ms, total 26380ms
+WARNING app.errors: 400 POST /api/v1/audio/transcriptions: Audio is 660s; the limit is 600s. Split it into shorter chunks.
+```
+
+RTF (real-time factor) is inference time divided by audio length; below 1 is faster than real
+time. Use `make dev-logs SERVICE=backend` to follow them.
 
 ## Notes
 
