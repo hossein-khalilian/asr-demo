@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
-import { API_URL, backendError } from "@/lib/server";
+import { fetch, type BodyInit } from "undici";
+import { API_URL, backendAgent, proxyFailure } from "@/lib/server";
 
 // Same-origin proxy to the backend's OpenRouter-style API. The browser never
 // talks to the backend directly, so there is no CORS to configure and the
@@ -17,6 +18,7 @@ const RESPONSE_HEADERS = [
   "x-queue-ms",
   "x-load-ms",
   "x-inference-ms",
+  "x-chunks",
 ];
 
 type Context = { params: Promise<{ path: string[] }> };
@@ -37,18 +39,19 @@ async function proxy(request: NextRequest, { params }: Context): Promise<Respons
   if (callerAuth) headers.set("authorization", callerAuth);
   else if (apiKey) headers.set("authorization", `Bearer ${apiKey}`);
 
-  let upstream: Response;
+  let upstream: Awaited<ReturnType<typeof fetch>>;
   try {
     upstream = await fetch(target, {
       method: request.method,
       headers,
       // Stream the upload through rather than buffering it in memory.
-      body: request.method === "GET" ? undefined : request.body,
-      cache: "no-store",
+      // The DOM's and undici's ReadableStream types differ; the object is the same.
+      body: request.method === "GET" ? undefined : (request.body as unknown as BodyInit),
       duplex: "half",
-    } as RequestInit & { duplex: "half" });
-  } catch {
-    return backendError(502, "The ASR backend is unreachable.");
+      dispatcher: backendAgent,
+    });
+  } catch (error) {
+    return proxyFailure(error);
   }
 
   const responseHeaders = new Headers();
@@ -56,7 +59,10 @@ async function proxy(request: NextRequest, { params }: Context): Promise<Respons
     const value = upstream.headers.get(name);
     if (value) responseHeaders.set(name, value);
   }
-  return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
+  return new Response(upstream.body as ReadableStream | null, {
+    status: upstream.status,
+    headers: responseHeaders,
+  });
 }
 
 export { proxy as GET, proxy as POST };

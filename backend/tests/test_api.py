@@ -244,8 +244,8 @@ def _wait_for_probe(client):
 
 
 def test_unavailable_models_are_reported(make_client, wav_bytes):
-    def checker(source):
-        return "private or missing on Hugging Face" if source == PRIVATE else None
+    def checker(spec):
+        return "private or missing on Hugging Face" if spec.source == PRIVATE else None
 
     with make_client(access_checker=checker) as client:
         _wait_for_probe(client)
@@ -266,8 +266,8 @@ def test_unavailable_models_are_reported(make_client, wav_bytes):
 
 
 def test_unavailable_model_does_not_evict_a_working_one(make_client, wav_bytes, engines):
-    def checker(source):
-        return "private" if source == PRIVATE else None
+    def checker(spec):
+        return "private" if spec.source == PRIVATE else None
 
     with make_client(access_checker=checker, asr_max_loaded_models=1) as client:
         _wait_for_probe(client)
@@ -328,11 +328,11 @@ def test_error_responses_are_logged_with_reason(client, caplog):
     )
 
 
-def test_unknown_nemo_log_level_is_ignored(caplog):
+def test_unknown_framework_log_level_is_ignored(caplog):
     from app.asr.engine import quiet_nemo
 
     quiet_nemo("chatty")  # returns before importing NeMo, which tests do not install
-    assert "Unknown ASR_NEMO_LOG_LEVEL" in caplog.text
+    assert "Unknown ASR_FRAMEWORK_LOG_LEVEL" in caplog.text
 
 
 def test_nemo_log_filter():
@@ -352,3 +352,90 @@ def test_nemo_log_filter():
     assert keep.filter(record(logging.ERROR, nemo_file))
     # Our own logs and other libraries are untouched.
     assert keep.filter(record(logging.INFO, "/app/app/routes/transcriptions.py"))
+
+
+WHISPER = "c1tech/whisper-base-persian"
+
+
+def test_local_copy_is_never_downloaded(tmp_path):
+    from app.asr.engine import check_access
+    from app.asr.spec import ModelSpec
+
+    folder = tmp_path / "whisper"
+    spec = ModelSpec(
+        id="c1tech/x",
+        source="C1Tech/whisper_base_persian",
+        name="x",
+        framework="transformers",
+        local_path=str(folder),
+    )
+    reason = check_access(spec)
+    assert reason.startswith("not downloaded yet")
+    assert "hf download C1Tech/whisper_base_persian --local-dir" in reason
+
+    folder.mkdir()
+    (folder / "README.md").write_text("gated repo: only the card came down")
+    assert check_access(spec).startswith("not downloaded yet")
+    (folder / "config.json").write_text("{}")
+    assert check_access(spec).startswith("download incomplete")
+    (folder / "model.safetensors").write_bytes(b"weights")
+    assert check_access(spec) is None
+
+
+def test_undownloaded_whisper_is_listed_unavailable(make_client, tmp_path):
+    import json
+
+    from app.asr.engine import check_access
+
+    catalog = tmp_path / "models.json"
+    catalog.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {"id": DEFAULT, "source": PRIVATE},
+                    {
+                        "id": WHISPER,
+                        "source": "C1Tech/whisper_base_persian",
+                        "framework": "transformers",
+                        "local_path": str(tmp_path / "not-downloaded"),
+                    },
+                ]
+            }
+        )
+    )
+
+    # Real check for local copies (disk only); skip the Hub for the rest.
+    def checker(spec):
+        return check_access(spec) if spec.local_path else None
+
+    with make_client(access_checker=checker, asr_models_file=catalog) as client:
+        _wait_for_probe(client)
+        model = client.get(f"/api/v1/models/{WHISPER}").json()["data"]
+    assert model["available"] is False
+    assert "hf download C1Tech/whisper_base_persian" in model["unavailable_reason"]
+    assert model["hugging_face_id"] == "C1Tech/whisper_base_persian"
+
+
+def test_catalog_frameworks():
+    from app.asr.spec import load_specs
+    from app.settings import BACKEND_DIR
+
+    specs = {s.id: s for s in load_specs(BACKEND_DIR / "config" / "models.json")}
+    assert specs[DEFAULT].framework == "nemo"
+    whisper = specs[WHISPER]
+    assert whisper.framework == "transformers"
+    assert dict(whisper.generate) == {"language": "fa", "task": "transcribe"}
+    assert whisper.load_from == str(BACKEND_DIR / "models" / "whisper_base_persian")
+
+
+def test_unknown_framework_is_rejected(tmp_path):
+    import json
+
+    import pytest
+
+    from app.asr.spec import load_specs
+
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps({"models": [{"source": "a/b", "framework": "onnx"}]}))
+    with pytest.raises(ValueError, match="framework"):
+        load_specs(path)

@@ -4,9 +4,9 @@
 - STT:    https://openrouter.ai/docs/api/api-reference/stt/create-transcription
 """
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ── Models ──────────────────────────────────────────────────────────────────
 
@@ -61,6 +61,9 @@ class Model(BaseModel):
     #: Hugging Face repo and no HF_TOKEN); ``unavailable_reason`` says why.
     available: bool = True
     unavailable_reason: str | None = None
+    #: Set for models that take limited audio per pass (Whisper: 30 s); the
+    #: server always chunks audio for them, to at most this length.
+    max_chunk_seconds: float | None = None
 
 
 class ListLinks(BaseModel):
@@ -97,13 +100,64 @@ class InputAudioURL(BaseModel):
     format: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9+._-]{0,15}$")
 
 
+#: The key this server reads in OpenRouter's ``provider.options``. OpenRouter
+#: forwards to each provider only the options under its own slug, so tuning
+#: settings for this server go there: ``{"provider": {"options": {"asr-demo": {...}}}}``.
+PROVIDER_SLUG = "asr-demo"
+
+
+class AsrOptions(BaseModel):
+    """Inference settings, sent as ``provider.options["asr-demo"]``.
+
+    Every default reproduces the untuned behaviour, so a request without
+    options transcribes exactly as before.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_seconds: float = Field(
+        default=0,
+        ge=0,
+        le=300,
+        description="Split the audio into chunks of this many seconds (0 = one pass).",
+    )
+    overlap_seconds: float = Field(
+        default=0, ge=0, le=10, description="Seconds each chunk shares with the next."
+    )
+    decoder: Literal["rnnt", "ctc"] | None = Field(
+        default=None, description="Hybrid NeMo models: which decoder. None = the model's default."
+    )
+    beam_size: int = Field(
+        default=1, ge=1, le=16, description="1 = greedy. Beam search has no word timestamps."
+    )
+    normalize: bool = Field(default=False, description="Normalise loudness (EBU R128).")
+    denoise: bool = Field(default=False, description="FFT noise reduction.")
+    highpass: bool = Field(default=False, description="Cut rumble below 80 Hz.")
+
+    @model_validator(mode="after")
+    def _check_chunking(self) -> "AsrOptions":
+        if self.chunk_seconds and self.chunk_seconds < 5:
+            raise ValueError("chunk_seconds must be 0 (off) or at least 5")
+        if self.chunk_seconds and self.overlap_seconds * 2 >= self.chunk_seconds:
+            raise ValueError("overlap_seconds must be less than half of chunk_seconds")
+        return self
+
+
+class ProviderPreferences(BaseModel):
+    """OpenRouter's ``provider`` object. Only ``options`` means anything here."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    options: dict[str, Any] | None = None
+
+
 class STTOptions(BaseModel):
     """Everything in a transcription request except the audio itself.
 
     OpenRouter-only routing fields (``provider``, ``trace``, ``session_id``,
     ``user``) are accepted and ignored, so a request built for OpenRouter works
-    here unchanged. So are ``temperature`` and ``prompt``, which these models
-    have no use for.
+    here unchanged, and so is ``prompt``. ``temperature`` applies to Whisper
+    models; NeMo models ignore it.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -116,6 +170,7 @@ class STTOptions(BaseModel):
     timestamp_granularities: list[Granularity] | None = None
     diarize: bool | None = None
     keyterms: list[str] | None = None
+    provider: ProviderPreferences | None = None
 
 
 class STTRequest(STTOptions):

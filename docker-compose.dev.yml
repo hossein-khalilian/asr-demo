@@ -58,6 +58,7 @@ services:
     environment:
       API_URL: http://asr-backend:8000
       ASR_API_KEY: ${ASR_API_KEY:-}
+      ASR_PROXY_TIMEOUT_SECONDS: ${ASR_PROXY_TIMEOUT_SECONDS:-1800}
       PUBLIC_URL: ${PUBLIC_URL:-}
     volumes:
       - ./frontend:/app

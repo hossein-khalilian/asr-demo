@@ -2,3 +2,6 @@
 # (see Dockerfile's TORCH_INDEX_URL), so pip does not pick a mismatched build.
 -r requirements.txt
 nemo_toolkit[asr]>=2.2,<3
+# Whisper and other Hugging Face ASR models (framework "transformers"). NeMo
+# pins the version (~=4.57), so models that need transformers 5 cannot run here.
+transformers

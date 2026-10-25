@@ -14,7 +14,13 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.asr.engine import NemoEngine, check_access, resolve_device
+from app.asr.engine import (
+    Engine,
+    NemoEngine,
+    TransformersEngine,
+    check_access,
+    resolve_device,
+)
 from app.asr.registry import AccessChecker, Loader, ModelRegistry, ModelSpec, load_specs
 from app.auth import require_api_key
 from app.errors import install_error_handlers
@@ -24,15 +30,22 @@ from app.settings import Settings, get_settings
 logger = logging.getLogger("app")
 
 
-def nemo_loader(settings: Settings) -> Loader:
+def model_loader(settings: Settings) -> Loader:
     device = resolve_device(settings.asr_device)
 
-    def load(spec: ModelSpec) -> NemoEngine:
+    def load(spec: ModelSpec) -> Engine:
+        if spec.framework == "transformers":
+            return TransformersEngine(
+                spec.load_from,
+                device=device,
+                generate_kwargs=dict(spec.generate),
+                log_level=settings.asr_framework_log_level,
+            )
         return NemoEngine(
-            spec.source,
+            spec.load_from,
             decoder=spec.decoder,
             device=device,
-            log_level=settings.asr_nemo_log_level,
+            log_level=settings.asr_framework_log_level,
         )
 
     return load
@@ -50,7 +63,7 @@ def create_app(
     )
     registry = ModelRegistry(
         load_specs(settings.asr_models_file),
-        loader=loader or nemo_loader(settings),
+        loader=loader or model_loader(settings),
         default_model=settings.asr_default_model,
         max_loaded=settings.asr_max_loaded_models,
         max_queue=settings.max_queue,
@@ -92,6 +105,7 @@ def create_app(
             "X-Queue-Ms",
             "X-Load-Ms",
             "X-Inference-Ms",
+            "X-Chunks",
         ],
     )
     install_error_handlers(app)

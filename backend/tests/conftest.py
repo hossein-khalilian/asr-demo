@@ -15,10 +15,15 @@ class FakeEngine:
     def __init__(self, model_id: str) -> None:
         self.model_id = model_id
         self.calls: list[tuple[str, bool]] = []
+        self.decodes: list = []
+        self.durations: list[float] = []
         self.unloaded = False
 
-    def transcribe(self, wav_path: str, *, timestamps: bool) -> Transcript:
+    def transcribe(self, wav_path: str, *, timestamps: bool, decode=None) -> Transcript:
         self.calls.append((wav_path, timestamps))
+        self.decodes.append(decode)
+        with wave.open(wav_path, "rb") as wav:  # the request deletes its files afterwards
+            self.durations.append(round(wav.getnframes() / wav.getframerate(), 1))
         if not timestamps:
             return Transcript(text="سلام دنیا")
         return Transcript(

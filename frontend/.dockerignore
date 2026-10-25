@@ -11,3 +11,4 @@ npm-debug.log*
 *.md
 *.tsbuildinfo
 Dockerfile
+.pnpm-store

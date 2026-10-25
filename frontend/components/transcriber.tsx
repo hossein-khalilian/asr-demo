@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2, Mic, Upload } from "lucide-react";
 import { RecordPanel } from "@/components/record-panel";
 import { ResultCard, type ResultWithAudio } from "@/components/result-card";
+import { SettingsPanel } from "@/components/settings-panel";
 import { UploadPanel } from "@/components/upload-panel";
 import { fetchHealth, fetchModels, transcribe } from "@/lib/api";
+import { DEFAULT_SETTINGS, setSettings, updateSettings, useSettings } from "@/lib/settings";
 import type { AsrModel } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +22,7 @@ export function Transcriber() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<ResultWithAudio[]>([]);
+  const settings = useSettings();
   const abortRef = useRef<AbortController | null>(null);
   const resultsRef = useRef(results);
 
@@ -42,6 +45,9 @@ export function Transcriber() {
   // Release the audio blobs the results keep for playback.
   useEffect(() => () => resultsRef.current.forEach((r) => URL.revokeObjectURL(r.audioUrl)), []);
 
+  const selected = models.find((m) => m.id === model);
+  const supported = selected?.supported_parameters ?? [];
+
   const submit = async (audio: Blob, filename: string) => {
     if (!model) return;
     setError(null);
@@ -52,9 +58,12 @@ export function Transcriber() {
       const result = await transcribe(audio, filename, {
         model,
         timestamps,
+        settings,
+        supported,
+        maxChunkSeconds: selected?.max_chunk_seconds ?? null,
         signal: controller.signal,
       });
-      setResults((prev) => [{ ...result, audioUrl: URL.createObjectURL(audio) }, ...prev]);
+      setResults((prev) => [{ ...result, audio, audioUrl: URL.createObjectURL(audio) }, ...prev]);
     } catch (err) {
       if (!controller.signal.aborted) setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -69,8 +78,6 @@ export function Transcriber() {
       if (gone) URL.revokeObjectURL(gone.audioUrl);
       return prev.filter((r) => r.id !== id);
     });
-
-  const selected = models.find((m) => m.id === model);
 
   return (
     <div className="flex flex-col gap-6">
@@ -131,6 +138,17 @@ export function Transcriber() {
           <p className="mt-2 text-sm text-destructive">Could not load models: {modelsError}</p>
         )}
 
+        {selected && (
+          <SettingsPanel
+            settings={settings}
+            supported={supported}
+            maxChunkSeconds={selected.max_chunk_seconds}
+            disabled={pending}
+            onChange={updateSettings}
+            onReset={() => setSettings(DEFAULT_SETTINGS)}
+          />
+        )}
+
         <div
           role="tablist"
           className="mt-6 grid grid-cols-2 gap-1 rounded-xl bg-muted p-1 text-sm font-medium"
@@ -183,7 +201,13 @@ export function Transcriber() {
       </section>
 
       {results.map((result) => (
-        <ResultCard key={result.id} result={result} onRemove={() => remove(result.id)} />
+        <ResultCard
+          key={result.id}
+          result={result}
+          rerunDisabled={pending || !selected?.available}
+          onRerun={() => void submit(result.audio, result.source)}
+          onRemove={() => remove(result.id)}
+        />
       ))}
     </div>
   );

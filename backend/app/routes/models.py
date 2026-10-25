@@ -20,10 +20,12 @@ def to_model(spec: ModelSpec, registry: ModelRegistry) -> Model:
         description=spec.description,
         hugging_face_id=spec.hugging_face_id,
         links=ModelLinks(details=f"/api/v1/models/{spec.id}/endpoints"),
+        supported_parameters=spec.supported_parameters,
         languages=list(spec.languages),
         loaded=registry.is_loaded(spec.id),
         available=spec.id not in registry.unavailable,
         unavailable_reason=registry.unavailable.get(spec.id),
+        max_chunk_seconds=spec.max_chunk_seconds,
     )
 
 

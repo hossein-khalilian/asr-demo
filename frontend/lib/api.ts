@@ -1,3 +1,4 @@
+import { PROVIDER_SLUG, providerOptions, type AsrSettings } from "@/lib/settings";
 import type { AsrModel, Health, TranscriptionResponse, TranscriptionResult } from "@/lib/types";
 
 /** An error body in OpenRouter's envelope: `{ error: { code, message } }`. */
@@ -31,13 +32,17 @@ export async function fetchHealth(): Promise<Health> {
 export type TranscribeOptions = {
   model: string;
   timestamps: boolean;
+  settings: AsrSettings;
+  /** The model's `supported_parameters`: only those settings are sent. */
+  supported: string[];
+  maxChunkSeconds: number | null;
   signal?: AbortSignal;
 };
 
 export async function transcribe(
   audio: Blob,
   filename: string,
-  { model, timestamps, signal }: TranscribeOptions,
+  { model, timestamps, settings, supported, maxChunkSeconds, signal }: TranscribeOptions,
 ): Promise<TranscriptionResult> {
   const form = new FormData();
   form.append("file", audio, filename);
@@ -46,6 +51,14 @@ export async function transcribe(
     form.append("response_format", "verbose_json");
     form.append("timestamp_granularities[]", "segment");
     form.append("timestamp_granularities[]", "word");
+  }
+  const options = providerOptions(settings, supported, maxChunkSeconds);
+  if (Object.keys(options).length > 0) {
+    // OpenRouter's provider preferences; object fields are JSON in multipart.
+    form.append("provider", JSON.stringify({ options: { [PROVIDER_SLUG]: options } }));
+  }
+  if (supported.includes("temperature") && settings.temperature > 0) {
+    form.append("temperature", String(settings.temperature));
   }
   const res = await fetch("/api/v1/audio/transcriptions", { method: "POST", body: form, signal });
   const body = await parse<TranscriptionResponse>(res);
@@ -62,6 +75,10 @@ export async function transcribe(
     model: res.headers.get("x-model") ?? model,
     source: filename,
     timings: Object.values(timings).every(Number.isFinite) ? timings : null,
+    chunks: Number(res.headers.get("x-chunks")) || 1,
+    settings,
+    supported,
+    maxChunkSeconds,
     createdAt: Date.now(),
   };
 }

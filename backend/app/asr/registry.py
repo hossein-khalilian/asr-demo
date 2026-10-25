@@ -9,62 +9,19 @@ inference means a model is never evicted while it is transcribing.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 
 from starlette.concurrency import run_in_threadpool
 
-from app.asr.engine import Engine, Transcript, access_error
+from app.asr.engine import DecodeOptions, Engine, Transcript, UnsupportedOption, access_error
+from app.asr.spec import ModelSpec, load_specs  # noqa: F401  (re-exported)
 from app.errors import APIError
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class ModelSpec:
-    #: OpenRouter-style slug, ``author/model``, lowercase.
-    id: str
-    #: Hugging Face / NGC model name, or a path to a local ``.nemo`` file.
-    source: str
-    name: str
-    description: str = ""
-    #: "rnnt" or "ctc" for hybrid checkpoints; None keeps the saved default.
-    decoder: str | None = None
-    languages: tuple[str, ...] = ()
-    created: int = 0
-    aliases: tuple[str, ...] = field(default=())
-
-    @property
-    def hugging_face_id(self) -> str | None:
-        return None if self.source.endswith(".nemo") else self.source
-
-
-def load_specs(path: Path) -> list[ModelSpec]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    specs: list[ModelSpec] = []
-    for entry in raw["models"]:
-        source = entry["source"]
-        model_id = entry.get("id") or source.lower()
-        specs.append(
-            ModelSpec(
-                id=model_id,
-                source=source,
-                name=entry.get("name") or model_id,
-                description=entry.get("description", ""),
-                decoder=entry.get("decoder"),
-                languages=tuple(entry.get("languages", ())),
-                created=int(entry.get("created", 0)),
-                aliases=tuple(entry.get("aliases", ())),
-            )
-        )
-    if not specs:
-        raise ValueError(f"{path} lists no models")
-    return specs
 
 
 @dataclass
@@ -78,8 +35,8 @@ class Timings:
 
 
 Loader = Callable[[ModelSpec], Engine]
-#: None if a model's source can be fetched, else the reason it cannot.
-AccessChecker = Callable[[str], str | None]
+#: None if a model can be loaded, else the reason it cannot.
+AccessChecker = Callable[[ModelSpec], str | None]
 
 
 class ModelRegistry:
@@ -139,8 +96,14 @@ class ModelRegistry:
     # ── Inference ────────────────────────────────────────────────────────────
 
     async def transcribe(
-        self, spec: ModelSpec, wav_path: str, *, timestamps: bool
-    ) -> tuple[Transcript, Timings]:
+        self,
+        spec: ModelSpec,
+        wav_paths: list[str],
+        *,
+        timestamps: bool,
+        decode: DecodeOptions = DecodeOptions(),
+    ) -> tuple[list[Transcript], Timings]:
+        """Transcribe every chunk of one request in a single turn of the queue."""
         timings = Timings()
         started = time.perf_counter()
         if self._lock.locked() and self._waiting >= self._max_queue:
@@ -162,15 +125,21 @@ class ModelRegistry:
             engine = await run_in_threadpool(self._get_or_load, spec)
             timings.load_ms = _ms_since(mark)
             mark = time.perf_counter()
+            transcripts: list[Transcript] = []
             try:
-                transcript = await run_in_threadpool(
-                    engine.transcribe, wav_path, timestamps=timestamps
-                )
+                for path in wav_paths:
+                    transcripts.append(
+                        await run_in_threadpool(
+                            engine.transcribe, path, timestamps=timestamps, decode=decode
+                        )
+                    )
+            except UnsupportedOption as exc:
+                raise APIError(400, f"Model '{spec.id}': {exc}.") from exc
             except Exception as exc:
                 logger.exception("Transcription failed on %s", spec.id)
                 raise APIError(500, f"Transcription failed: {exc}") from exc
             timings.inference_ms = _ms_since(mark)
-            return transcript, timings
+            return transcripts, timings
         finally:
             self.busy = False
             self._lock.release()
@@ -179,7 +148,7 @@ class ModelRegistry:
         """Find the models this server cannot fetch, so clients can see it in
         /models before asking for one."""
         for spec in self.specs.values():
-            reason = await run_in_threadpool(checker, spec.source)
+            reason = await run_in_threadpool(checker, spec)
             if reason:
                 logger.warning("Model %s is unavailable: %s", spec.id, reason)
                 self.unavailable[spec.id] = reason

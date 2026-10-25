@@ -1,3 +1,5 @@
+import type { AsrSettings } from "@/lib/settings";
+
 /** The slice of OpenRouter's model object the UI reads. */
 export type AsrModel = {
   id: string;
@@ -6,6 +8,10 @@ export type AsrModel = {
   hugging_face_id: string | null;
   languages: string[];
   loaded: boolean;
+  /** OpenRouter's field: the request parameters, including tuning options, this model takes. */
+  supported_parameters: string[];
+  /** Whisper: the longest audio per pass (30 s). The server always chunks to it. */
+  max_chunk_seconds: number | null;
   /** False when the server cannot fetch the checkpoint (e.g. no HF_TOKEN for a private repo). */
   available: boolean;
   unavailable_reason: string | null;
@@ -38,5 +44,11 @@ export type TranscriptionResult = TranscriptionResponse & {
   source: string;
   /** Timings from the X-*-Ms headers; null when the backend sent none. */
   timings: { totalMs: number; queueMs: number; loadMs: number; inferenceMs: number } | null;
+  /** How many chunks the audio was transcribed in (1 = one pass). */
+  chunks: number;
+  /** The settings this run used, and what the model accepted of them. */
+  settings: AsrSettings;
+  supported: string[];
+  maxChunkSeconds: number | null;
   createdAt: number;
 };

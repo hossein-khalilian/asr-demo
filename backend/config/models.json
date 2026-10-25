@@ -5,7 +5,9 @@
       "source": "hsekhalilian/Speech_To_Text_Finetuning_01",
       "name": "Persian FastConformer (fine-tune 01)",
       "description": "FastConformer Hybrid RNNT/CTC fine-tuned from nvidia/stt_fa_fastconformer_hybrid_large.",
-      "languages": ["fa"],
+      "languages": [
+        "fa"
+      ],
       "created": 1735689600
     },
     {
@@ -13,7 +15,9 @@
       "source": "hsekhalilian/Speech_To_Text_Finetuning_03_no_punc_with_encoder",
       "name": "Persian FastConformer (fine-tune 03, no punctuation)",
       "description": "Fine-tuned without punctuation, with the encoder trained as well.",
-      "languages": ["fa"],
+      "languages": [
+        "fa"
+      ],
       "created": 1735689600
     },
     {
@@ -22,7 +26,9 @@
       "name": "Persian FastConformer (RNNT fine-tune)",
       "description": "RNNT-focused fine-tune.",
       "decoder": "rnnt",
-      "languages": ["fa"],
+      "languages": [
+        "fa"
+      ],
       "created": 1735689600
     },
     {
@@ -30,7 +36,9 @@
       "source": "hsekhalilian/stt_fa_fastconformer_updated_tokenizer",
       "name": "Persian FastConformer (updated tokenizer)",
       "description": "Fine-tuned with an updated tokenizer.",
-      "languages": ["fa"],
+      "languages": [
+        "fa"
+      ],
       "created": 1735689600
     },
     {
@@ -38,8 +46,42 @@
       "source": "nvidia/stt_fa_fastconformer_hybrid_large",
       "name": "NVIDIA Persian FastConformer Hybrid Large",
       "description": "NVIDIA's base Persian FastConformer Hybrid RNNT/CTC model (115M parameters).",
-      "languages": ["fa"],
+      "languages": [
+        "fa"
+      ],
       "created": 1704067200
+    },
+    {
+      "id": "c1tech/whisper-base-persian",
+      "source": "C1Tech/whisper_base_persian",
+      "name": "Whisper Base Persian (C1Tech)",
+      "description": "openai/whisper-base fine-tuned for Persian (74M parameters).",
+      "framework": "transformers",
+      "local_path": "models/whisper_base_persian",
+      "generate": {
+        "language": "fa",
+        "task": "transcribe"
+      },
+      "languages": [
+        "fa"
+      ],
+      "created": 1753786477
+    },
+    {
+      "id": "c1tech/whisper-small-persian",
+      "source": "C1Tech/whisper_small_persian",
+      "name": "Whisper Small Persian (C1Tech)",
+      "description": "openai/whisper-small fine-tuned for Persian (244M parameters). Gated: request access on Hugging Face before downloading.",
+      "framework": "transformers",
+      "local_path": "models/whisper_small_persian",
+      "generate": {
+        "language": "fa",
+        "task": "transcribe"
+      },
+      "languages": [
+        "fa"
+      ],
+      "created": 1753786477
     }
   ]
 }

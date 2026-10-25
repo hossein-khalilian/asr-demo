@@ -1,17 +1,24 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Check, Copy, Trash2 } from "lucide-react";
+import { Check, Copy, RotateCcw, Trash2 } from "lucide-react";
+import { describeSettings } from "@/lib/settings";
 import type { TranscriptionResult } from "@/lib/types";
 import { formatClock, formatDuration } from "@/lib/utils";
 
-export type ResultWithAudio = TranscriptionResult & { audioUrl: string };
+/** A result plus the audio it came from, kept for playback and re-runs. */
+export type ResultWithAudio = TranscriptionResult & { audio: Blob; audioUrl: string };
 
 export function ResultCard({
   result,
+  rerunDisabled,
+  onRerun,
   onRemove,
 }: {
   result: ResultWithAudio;
+  rerunDisabled: boolean;
+  /** Transcribe the same audio again with the current model and settings. */
+  onRerun: () => void;
   onRemove: () => void;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -20,6 +27,7 @@ export function ResultCard({
   const timings = result.timings;
   // Waiting for the model and loading it say nothing about its speed.
   const waitedMs = timings ? timings.queueMs + timings.loadMs : 0;
+  const tuning = describeSettings(result.settings, result.supported, result.maxChunkSeconds);
 
   const copy = async () => {
     await navigator.clipboard.writeText(result.text);
@@ -61,6 +69,16 @@ export function ResultCard({
         <span className="ms-auto flex gap-1">
           <button
             type="button"
+            onClick={onRerun}
+            disabled={rerunDisabled}
+            title="Transcribe this audio again with the current model and tuning, to compare"
+            className="flex items-center gap-1 rounded-md px-2 py-1.5 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RotateCcw className="size-3.5" />
+            Re-run
+          </button>
+          <button
+            type="button"
             onClick={copy}
             className="rounded-md p-1.5 hover:bg-muted hover:text-foreground"
             aria-label="Copy transcript"
@@ -77,6 +95,29 @@ export function ResultCard({
           </button>
         </span>
       </header>
+
+      <div className="mb-3 flex flex-wrap gap-1.5 text-xs">
+        {(tuning.length ? tuning : ["model defaults"]).map((label) => (
+          <span
+            key={label}
+            className={
+              tuning.length
+                ? "rounded-md bg-primary/10 px-2 py-0.5 font-medium text-primary"
+                : "rounded-md bg-muted px-2 py-0.5 text-muted-foreground"
+            }
+          >
+            {label}
+          </span>
+        ))}
+        {result.chunks > 1 && (
+          <span className="rounded-md bg-muted px-2 py-0.5 text-muted-foreground">
+            {result.chunks} chunks
+          </span>
+        )}
+        <span className="rounded-md bg-muted px-2 py-0.5 text-muted-foreground">
+          {result.text.split(/\s+/).filter(Boolean).length} words
+        </span>
+      </div>
 
       {result.text ? (
         <p dir="auto" className="whitespace-pre-wrap font-fa text-lg leading-loose">

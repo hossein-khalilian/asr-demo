@@ -31,9 +31,9 @@ class Settings(BaseSettings):
     asr_max_loaded_models: int = Field(default=2, ge=1)
     #: "auto" picks CUDA when available, else CPU.
     asr_device: str = "auto"
-    #: Level for NeMo's own logger (and NVIDIA's OneLogger). NeMo warns on every
-    #: transcription about dataloader keys and CUDA graphs; "error" hides that.
-    asr_nemo_log_level: str = "error"
+    #: Level for the model runtimes' own logging: NeMo (and NVIDIA's OneLogger)
+    #: and transformers. Both warn on every transcription; "error" hides that.
+    asr_framework_log_level: str = "error"
 
     # ── Limits ────────────────────────────────────────────────────────────────
     #: Upload cap, same as OpenRouter's 25 MB.

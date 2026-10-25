@@ -1,12 +1,13 @@
 # ASR Demo: Persian Speech-to-Text
 
 Self-hosted Persian speech recognition with [NVIDIA NeMo](https://github.com/NVIDIA/NeMo)
-FastConformer models, served through **OpenRouter's speech-to-text API**. Any OpenRouter or
+FastConformer models and Hugging Face Transformers (Whisper) models, served through
+**OpenRouter's speech-to-text API**. Any OpenRouter or
 OpenAI client can use it by changing the base URL. A Next.js app records or uploads audio and
 shows the transcript with timestamps.
 
 ```
- Browser ──▶ Next.js (:3000) ──/api/v1/*──▶ FastAPI + NeMo (:8000)
+ Browser ──▶ Next.js (:3000) ──/api/v1/*──▶ FastAPI + NeMo / Transformers (:8000)
              record / upload    same-origin   GET  /api/v1/models
              server-side key    proxy         POST /api/v1/audio/transcriptions
 ```
@@ -98,6 +99,32 @@ Errors use OpenRouter's envelope, and the HTTP status equals `code`:
 { "error": { "code": 400, "message": "'openai/whisper-1' is not a valid model ID.", "metadata": { "available": ["…"] } } }
 ```
 
+### Tuning
+
+Inference settings travel the way OpenRouter passes provider-specific options: under
+`provider.options`, keyed by this server's slug `asr-demo`. In multipart, `provider` is a
+JSON-encoded string, as on OpenRouter. Each model lists the settings it takes in
+`supported_parameters`; the UI shows only those, in its **Tuning** panel, and every result has a
+**Re-run** button to compare settings on the same audio.
+
+```bash
+curl http://localhost:8000/api/v1/audio/transcriptions \
+  -F file=@sample.mp3 \
+  -F 'provider={"options":{"asr-demo":{"decoder":"ctc","chunk_seconds":30,"overlap_seconds":2}}}'
+```
+
+| Option | Default | Models | Effect |
+|---|---|---|---|
+| `decoder` | model's | NeMo hybrid | `rnnt` or `ctc`. CTC ran 2.6× faster on CPU and, for the base NVIDIA model, was more accurate |
+| `beam_size` | `1` (greedy) | all | Beam search (NeMo `malsd_batch` / `beam_batch`, Whisper `num_beams`). 2–3× slower on CPU, and NeMo gives no word timestamps with it |
+| `chunk_seconds` | `0` (one pass) | all | Split audio into chunks (≥ 5 s). Stitched by word timing, or by repeated words when there is none (beam search, Whisper). Capped at the model's `max_chunk_seconds` (Whisper: 30, and always chunked) |
+| `overlap_seconds` | `0` | all | Audio shared between chunks; less than half a chunk |
+| `normalize` / `denoise` / `highpass` | off | all | ffmpeg loudness normalisation, FFT noise reduction, 80 Hz high-pass |
+| `temperature` (top-level, OpenRouter's field) | `0` | Whisper | Sampling temperature; NeMo models ignore it |
+
+The defaults reproduce untuned behaviour. The `X-Chunks` response header says how many chunks
+were transcribed, and the backend log line lists the non-default settings.
+
 ### With the OpenAI SDK
 
 ```python
@@ -134,20 +161,46 @@ print(result.text)
 }
 ```
 
-- `source` is a Hugging Face / NGC name, or a path to a local `.nemo` file. Put local files in
-  `backend/models/`; the prod stack mounts it at `/app/models` (`"source": "models/my.nemo"`).
-- `decoder` (optional) switches hybrid RNNT/CTC checkpoints to `rnnt` or `ctc`. Leave it out
-  to keep the checkpoint's saved decoder.
+- `source` is a Hugging Face / NGC name, or a path to a local `.nemo` file.
+- `framework` is `nemo` (the default) or `transformers`, for Hugging Face
+  `automatic-speech-recognition` models such as Whisper.
+- `local_path` (optional) loads the model from a folder under `backend/` instead of
+  downloading `source`. **The server never downloads such a model.** Until the folder exists it
+  is listed as unavailable, with the download command as the reason.
+- `decoder` (optional, NeMo) switches hybrid RNNT/CTC checkpoints to `rnnt` or `ctc`. Leave it
+  out to keep the checkpoint's saved decoder.
+- `generate` (optional, transformers) passes extra arguments to `generate()`, e.g.
+  `{"language": "fa", "task": "transcribe"}` for Whisper.
 - At startup the server asks the Hugging Face Hub whether it can fetch each model. A model it
   cannot fetch (a private repo and no `HF_TOKEN`) is listed with `available: false` and a reason,
   is greyed out in the UI, and answers 503 with that reason instead of a Hub traceback. Change
   `backend/.env` and recreate the backend to re-check.
+- Whisper hears at most 30 s at a time (`max_chunk_seconds`, which defaults to 30 for
+  `transformers` models), so the server always cuts longer audio into 30 s chunks with 2 s of
+  overlap and joins them on repeated words. Whisper is never asked for timestamp tokens: the
+  C1Tech fine-tunes were trained without them and return an empty transcript when asked. Its
+  `verbose_json` segments are therefore the chunks, and there are no word timings.
 - Models load on first use. At most `ASR_MAX_LOADED_MODELS` stay in memory; the least recently
   used one is unloaded to make room.
 - One request runs at a time, because NeMo models are not safe to call concurrently. Up to
   `MAX_QUEUE` requests wait, and past that the server answers 503 with `Retry-After`.
 - Models that emit no punctuation return the whole clip as one NeMo segment. `verbose_json` then
   builds segments from word timings, cutting at pauses.
+
+### Downloading models yourself
+
+Models with a `local_path` (the C1Tech Whisper models) are downloaded by hand. `hf` is installed
+in the backend image, and the dev stack bind-mounts `backend/`, so the files land in
+`backend/models/` on the host:
+
+```bash
+docker compose -f docker-compose.dev.yml exec backend hf download C1Tech/whisper_base_persian --local-dir models/whisper_base_persian
+```
+
+`C1Tech/whisper_small_persian` is gated: request access on its Hugging Face page first, then
+download it the same way. `HF_TOKEN` must belong to the account that was granted access. The
+prod stack mounts `backend/models/` read-only, so download on the host there. Then recreate the
+backend (`docker compose … up -d --force-recreate backend`) so it re-checks the models.
 
 ---
 
@@ -161,7 +214,7 @@ print(result.text)
 | `ASR_PRELOAD` | `default` | `default`, `all`, `none`, or a comma list of ids |
 | `ASR_MAX_LOADED_MODELS` | `2` | Models kept in memory |
 | `ASR_DEVICE` | `auto` | `auto`, `cuda` or `cpu` |
-| `ASR_NEMO_LOG_LEVEL` | `error` | NeMo's own logging. It warns on every request otherwise; use `warning` or `info` to debug a model |
+| `ASR_FRAMEWORK_LOG_LEVEL` | `error` | NeMo's and transformers' own logging. They warn on every request otherwise; use `warning` or `info` to debug a model |
 | `API_KEYS` | empty | Comma-separated bearer keys. **Empty = open API**, for local use only |
 | `MAX_UPLOAD_MB` / `MAX_AUDIO_SECONDS` / `MAX_QUEUE` | `25` / `600` / `16` | Request limits |
 | `HF_TOKEN` | empty | Needed for the private `hsekhalilian/*` checkpoints |
@@ -170,7 +223,9 @@ print(result.text)
 Traefik, `ASR_API_KEY` (the key the frontend proxy sends; it must be one of `API_KEYS`), and the
 base image registry and pip/PyTorch indexes.
 
-**Frontend** (server-side only, never sent to the browser): `API_URL` and `ASR_API_KEY`.
+**Frontend** (server-side only, never sent to the browser): `API_URL`, `ASR_API_KEY`, and
+`ASR_PROXY_TIMEOUT_SECONDS` (default 1800: how long the proxy waits for a transcription; past it
+the browser gets a 504).
 
 ---
 

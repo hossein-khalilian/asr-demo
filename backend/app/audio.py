@@ -17,6 +17,15 @@ from pathlib import Path
 from app.errors import APIError
 
 SAMPLE_RATE = 16_000
+
+#: Optional clean-up, applied in this order: cut rumble, then reduce noise,
+#: then even out loudness (so the noise is not amplified first). None of them
+#: changes the audio's length, so timestamps stay valid.
+FILTERS = {
+    "highpass": "highpass=f=80",
+    "denoise": "afftdn=nf=-25",
+    "normalize": "loudnorm=I=-16:TP=-1.5:LRA=11",
+}
 _SAFE_FORMAT = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9+._-]{0,15}$")
 
 
@@ -48,8 +57,16 @@ def temp_dir() -> Iterator[Path]:
         yield Path(path)
 
 
-async def decode_to_wav(data: bytes, fmt: str | None, workdir: Path) -> DecodedAudio:
-    """Write ``data`` to ``workdir`` and convert it to 16 kHz mono PCM WAV.
+def filter_chain(*, highpass: bool, denoise: bool, normalize: bool) -> list[str]:
+    wanted = {"highpass": highpass, "denoise": denoise, "normalize": normalize}
+    return [FILTERS[name] for name in FILTERS if wanted[name]]
+
+
+async def decode_to_wav(
+    data: bytes, fmt: str | None, workdir: Path, filters: list[str] | None = None
+) -> DecodedAudio:
+    """Write ``data`` to ``workdir`` and convert it to 16 kHz mono PCM WAV,
+    through the ffmpeg ``filters`` given (see :func:`filter_chain`).
 
     ``fmt == "pcm"`` means headerless signed 16-bit little-endian mono at
     16 kHz, as OpenRouter defines it; anything else is left to ffmpeg to sniff.
@@ -75,6 +92,7 @@ async def decode_to_wav(data: bytes, fmt: str | None, workdir: Path) -> DecodedA
         "-i",
         str(source),
         "-vn",
+        *(["-af", ",".join(filters)] if filters else []),
         "-ac",
         "1",
         "-ar",

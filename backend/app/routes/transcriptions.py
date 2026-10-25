@@ -9,6 +9,7 @@ Takes either body OpenRouter takes:
 
 import base64
 import binascii
+import json
 import logging
 import time
 import uuid
@@ -19,12 +20,15 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
-from app.asr.engine import segments_from_words
+from app.asr.chunking import merge, split_wav
+from app.asr.engine import DecodeOptions, segments_from_words
 from app.asr.registry import ModelRegistry, ModelSpec
-from app.audio import decode_to_wav, format_from_filename, temp_dir
+from app.audio import decode_to_wav, filter_chain, format_from_filename, temp_dir
 from app.errors import APIError
 from app.routes.models import get_registry
 from app.schemas import (
+    PROVIDER_SLUG,
+    AsrOptions,
     InputAudioURL,
     Segment,
     STTOptions,
@@ -39,6 +43,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["speech-to-text"])
 
 _LIST_FIELDS = ("timestamp_granularities", "keyterms")
+_JSON_FIELDS = ("provider", "trace")
+#: Overlap used when the server chunks audio the request did not ask to chunk.
+DEFAULT_OVERLAP_SECONDS = 2.0
 
 
 @router.post(
@@ -93,18 +100,36 @@ async def create_transcription(
         raise APIError(400, "Send application/json or multipart/form-data.")
 
     spec = registry.resolve(options.model)
-    _check_options(options, spec)
+    tuning = _tuning_options(options)
+    _check_options(options, tuning, spec)
     verbose = options.response_format == "verbose_json"
+    decode = DecodeOptions(
+        decoder=tuning.decoder,
+        beam_size=tuning.beam_size,
+        temperature=options.temperature if spec.framework == "transformers" else None,
+    )
 
     with temp_dir() as workdir:
-        decoded = await decode_to_wav(audio, fmt, workdir)
+        filters = filter_chain(
+            highpass=tuning.highpass, denoise=tuning.denoise, normalize=tuning.normalize
+        )
+        decoded = await decode_to_wav(audio, fmt, workdir, filters)
         if settings.max_audio_seconds and decoded.seconds > settings.max_audio_seconds:
             raise APIError(
                 400,
                 f"Audio is {decoded.seconds:.0f}s; the limit is {settings.max_audio_seconds:.0f}s. "
                 "Split it into shorter chunks.",
             )
-        transcript, timings = await registry.transcribe(spec, str(decoded.path), timestamps=verbose)
+        chunk_seconds, overlap_seconds = _chunking(tuning, spec)
+        chunks = split_wav(decoded.path, chunk_seconds, overlap_seconds, workdir)
+        transcripts, timings = await registry.transcribe(
+            spec,
+            [str(chunk.path) for chunk in chunks],
+            # Stitching overlapping chunks needs word times even for plain json.
+            timestamps=verbose or len(chunks) > 1,
+            decode=decode,
+        )
+        transcript = merge(chunks, transcripts, overlap_seconds)
 
     body = STTResponse(text=transcript.text, usage=Usage(seconds=decoded.seconds))
     if verbose:
@@ -128,10 +153,11 @@ async def create_transcription(
     # Total time includes waiting behind other requests; inference alone is
     # what says how fast the model is (RTF < 1 is faster than real time).
     logger.info(
-        "Transcribed %.1fs of audio with %s: inference %dms (RTF %.2f), "
+        "Transcribed %.1fs of audio with %s%s: inference %dms (RTF %.2f), "
         "queued %dms, model load %dms, total %dms",
         decoded.seconds,
         spec.id,
+        _describe(tuning, decode, len(chunks), chunk_seconds, overlap_seconds),
         timings.inference_ms,
         timings.inference_ms / 1000 / decoded.seconds,
         timings.queued_ms,
@@ -147,6 +173,7 @@ async def create_transcription(
             "X-Queue-Ms": str(timings.queued_ms),
             "X-Load-Ms": str(timings.load_ms),
             "X-Inference-Ms": str(timings.inference_ms),
+            "X-Chunks": str(len(chunks)),
         },
     )
 
@@ -190,6 +217,12 @@ async def _read_multipart(
                 fields.setdefault(name, []).append(value)
             elif name == "diarize":
                 fields[name] = value.lower() in ("1", "true", "yes")
+            elif name in _JSON_FIELDS:
+                # OpenRouter: object fields travel JSON-encoded in multipart.
+                try:
+                    fields[name] = json.loads(value)
+                except ValueError as exc:
+                    raise APIError(400, f"{name}: must be a JSON-encoded object.") from exc
             else:
                 fields[name] = value
         try:
@@ -205,7 +238,22 @@ async def _read_multipart(
         await form.close()
 
 
-def _check_options(options: STTOptions, spec: ModelSpec) -> None:
+def _tuning_options(options: STTOptions) -> AsrOptions:
+    raw = ((options.provider and options.provider.options) or {}).get(PROVIDER_SLUG) or {}
+    try:
+        return AsrOptions.model_validate(raw)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        where = ".".join(str(part) for part in first["loc"])
+        prefix = f"provider.options.{PROVIDER_SLUG}"
+        raise APIError(
+            400, f"{prefix}.{where}: {first['msg']}" if where else f"{prefix}: {first['msg']}"
+        ) from exc
+
+
+def _check_options(options: STTOptions, tuning: AsrOptions, spec: ModelSpec) -> None:
+    if tuning.decoder and "decoder" not in spec.supported_parameters:
+        raise APIError(400, f"Model '{spec.id}' has no decoder choice; decoder is for NeMo models.")
     if options.diarize:
         raise APIError(400, f"Model '{spec.id}' does not support diarize.")
     if options.keyterms:
@@ -219,6 +267,36 @@ def _check_options(options: STTOptions, spec: ModelSpec) -> None:
                 f"Model '{spec.id}' transcribes {', '.join(spec.languages)} only, "
                 f"not '{options.language}'.",
             )
+
+
+def _chunking(tuning: AsrOptions, spec: ModelSpec) -> tuple[float, float]:
+    """Chunk length and overlap for this request: what it asked for, kept
+    within the model's window (Whisper's 30 s). A model with a window is
+    always chunked, with a default overlap when the request set none."""
+    chunk, overlap = tuning.chunk_seconds, tuning.overlap_seconds
+    window = spec.max_chunk_seconds
+    if window and (not chunk or chunk > window):
+        if not chunk:
+            overlap = DEFAULT_OVERLAP_SECONDS
+        chunk = window
+        overlap = min(overlap, chunk / 2 - 0.5)
+    return chunk, overlap
+
+
+def _describe(
+    tuning: AsrOptions, decode: DecodeOptions, chunks: int, chunk: float, overlap: float
+) -> str:
+    """The non-default settings, for the log line ("" when untuned)."""
+    parts = [
+        f"{name}={value}"
+        for name, value in tuning.model_dump(exclude_defaults=True).items()
+        if name not in ("chunk_seconds", "overlap_seconds")
+    ]
+    if chunks > 1:
+        parts.insert(0, f"{chunks} chunks of {chunk:g}s/{overlap:g}s")
+    if decode.temperature:
+        parts.append(f"temperature={decode.temperature:g}")
+    return f" [{', '.join(parts)}]" if parts else ""
 
 
 def _invalid(exc: ValidationError) -> APIError:
